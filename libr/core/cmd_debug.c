@@ -811,26 +811,26 @@ static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
 	int i;
 	bool isNull = false;
 	PRINT_GREEN_ARENA ("main_arena @ ");
-	PRINTF_BLUE_ARENA ("0x%zx\n\n", (size_t) m_arena);
+	PRINTF_BLUE_ARENA ("0x%"PFMT64x"\n\n", (ut64)(size_t)m_arena);
 	PRINT_GREEN_ARENA ("struct malloc_state main_arena {\n");
 	PRINT_GREEN_ARENA ("\tmutex = ");
-	PRINTF_BLUE_ARENA (" 0x%x\n", (int) main_arena->mutex);
+	PRINTF_BLUE_ARENA (" 0x%x\n", (int)main_arena->mutex);
 	PRINT_GREEN_ARENA ("\tflags = ");
-	PRINTF_BLUE_ARENA (" 0x%x\n", (int) main_arena->flags);
+	PRINTF_BLUE_ARENA (" 0x%x\n", (int)main_arena->flags);
 	PRINT_GREEN_ARENA ("\tfastbinsY = {");
 
 	for (i = 0; i < NFASTBINS; i++) {
-		PRINTF_BLUE_ARENA ("0x%zx", (size_t)main_arena->fastbinsY[i]);
+		PRINTF_BLUE_ARENA ("0x%"PFMT64x, (ut64)(size_t)main_arena->fastbinsY[i]);
 		if (i < 9) {
 			PRINT_GREEN_ARENA (",");
 		}
 	}
 	PRINT_GREEN_ARENA ("}\n");
 	PRINT_GREEN_ARENA ("\ttop = ");
-	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->top);
+	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->top);
 	PRINT_GREEN_ARENA (",\n");
 	PRINT_GREEN_ARENA ("\tlast_remainder = ");
-	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->last_remainder);
+	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->last_remainder);
 	PRINT_GREEN_ARENA (",\n");
 	PRINT_GREEN_ARENA ("\tbins {");
 
@@ -841,8 +841,8 @@ static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
 			PRINT_GREEN_ARENA ("<repeats 254 times>");
 			break;
 		} else {
-			PRINTF_BLUE_ARENA (" 0x%zx", (size_t)main_arena->bins[i]);
-			PRINTF_GREEN_ARENA (" <main_arena+%04d>, ", (size_t) main_arena->bins[i] - (size_t) m_arena);
+			PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->bins[i]);
+			PRINTF_GREEN_ARENA (" <main_arena+%04d>, ", (size_t)main_arena->bins[i] - (size_t)m_arena);
 		}
 	}
 	PRINT_GREEN_ARENA ("\n\t}\t\n");
@@ -856,16 +856,16 @@ static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
 	}
 	PRINT_GREEN_ARENA ("}\n");
 	PRINT_GREEN_ARENA ("\tnext = ");
-	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->next);
+	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->next);
 	PRINT_GREEN_ARENA (",\n");
 	PRINT_GREEN_ARENA ("\tnext_free = ");
-	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->next_free);
+	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->next_free);
 	PRINT_GREEN_ARENA (",\n");
 	PRINT_GREEN_ARENA ("\tsystem_mem = ");
-	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->system_mem);
+	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->system_mem);
 	PRINT_GREEN_ARENA (",\n");
 	PRINT_GREEN_ARENA ("\tmax_system_mem = ");
-	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->max_system_mem);
+	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->max_system_mem);
 	PRINT_GREEN_ARENA (",\n");
 	PRINT_GREEN_ARENA ("}\n\n");
 }
@@ -958,7 +958,6 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 			}
 
 			snprintf (path, sizeof (path), "%s", libc_ver_end);
-
 			if (r_file_is_directory ("/usr/lib/debug") && !r_file_is_directory ("/usr/lib/debug/.build-id")) {
 				snprintf (path, sizeof (path), "%s%s", dir_dbg, libc_ver_end);
 			} 
@@ -968,7 +967,7 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 				libc_ver_end = hash;
 				snprintf (path, sizeof (path), "%s%s%s", dir_dbg, dir_build_id, libc_ver_end);
 			} 
-	
+
 			if (r_file_exists (path)) {
 				ut64 vaddr = get_vaddr_symbol (path, symname);
 				if (libc_addr != UT64_MAX && vaddr && vaddr != UT64_MAX) {
