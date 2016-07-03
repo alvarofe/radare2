@@ -917,7 +917,7 @@ static void get_hash_debug_directory(const char *path, char *hash) {
 		if (i <= 1) {
 			hash[i + 2 * j++] = (ut8) '/';
 		}
-		sprintf (hash + j + 2 * i, "%02x", (ut8) buf[i]);
+		snprintf (hash + j + 2 * i, sizeof (hash), "%02x", (ut8) buf[i]);
 	}
 	strcat (hash, ".debug");
 out_error:
@@ -935,45 +935,59 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 	RListIter *iter;
 	RDebugMap *map;
 	RHeap_MallocState *main_arena;
-	ut64 m_arena = UT64_MAX;
+	static ut64 m_arena = UT64_MAX;
 
 	switch (input[0]) {
 	case 'a': // "dmha"
 		{
-		const char *dir_dbg = "/usr/lib/debug";
-		const char *dir_dbg_build_id = "/usr/lib/debug/.build-id";
-		const char *symname = "main_arena";
-		const char *libc_ver = NULL;
-		const char *libc_ver_end = NULL;
-		char hash[64] = {0}, path[4096] = {0};
-		ut64 libc_addr = UT64_MAX;
-		if (!core || !core->dbg || !core->dbg->maps) break;
-		r_debug_map_sync (core->dbg);
-		r_list_foreach (core->dbg->maps, iter, map) {
-			if (strstr (map->name, "/libc-")) {
-				libc_addr = (SIZE_SZ == 4) ? (map->addr_end) : (map->addr);
-				libc_ver_end = map->name;
-				break;
+		if (m_arena == UT64_MAX) {
+			const char *dir_dbg = "/usr/lib/debug";
+			const char *dir_build_id = "/.build-id";
+			const char *symname = "main_arena";
+			const char *libc_ver_end = NULL;
+			char hash[64] = {0}, path[4096] = {0};
+			ut64 libc_addr = UT64_MAX;
+			if (!core || !core->dbg || !core->dbg->maps) break;
+			r_debug_map_sync (core->dbg);
+			r_list_foreach (core->dbg->maps, iter, map) {
+				if (strstr (map->name, "/libc-")) {
+					libc_addr = (SIZE_SZ == 4) ? (map->addr_end) : (map->addr);
+					libc_ver_end = map->name;
+					break;
+				}
 			}
-		}
 
-		if (!r_file_is_directory (dir_dbg)) {
-			eprintf ("Debug directory not found at /usr/lib, is libc<version>-dbg installed?\n");
-			break;
-		}
+			snprintf (path, sizeof (path), "%s", libc_ver_end);
 
-		if (!r_file_is_directory (dir_dbg_build_id)) {
-			libc_ver = dir_dbg;
+			if (r_file_is_directory ("/usr/lib/debug") && !r_file_is_directory ("/usr/lib/debug/.build-id")) {
+				snprintf (path, sizeof (path), "%s%s", dir_dbg, libc_ver_end);
+			} 
+
+			if (r_file_is_directory ("/usr/lib/debug/.build-id")) {
+				get_hash_debug_directory (libc_ver_end, hash);
+				libc_ver_end = hash;
+				snprintf (path, sizeof (path), "%s%s%s", dir_dbg, dir_build_id, libc_ver_end);
+			} 
+	
+			if (r_file_exists (path)) {
+				ut64 vaddr = get_vaddr_symbol (path, symname);
+				if (libc_addr != UT64_MAX && vaddr && vaddr != UT64_MAX) {
+					m_arena = libc_addr + vaddr;
+					main_arena = R_NEW0 (RHeap_MallocState);
+					if (!main_arena) {
+						eprintf ("Warning: out of memory\n");
+						break;
+					}
+					update_main_arena (core, m_arena, main_arena);
+					print_main_arena (m_arena, main_arena);
+					free (main_arena);
+				} else {
+					eprintf ("Warning: virtual address of symbol main_arena could not be found. Is glibc<version>-dbg installed?\n");
+				}			
+			} else {
+				eprintf ("Fatal error: glibc library could not be found\n");			
+			}
 		} else {
-			libc_ver = dir_dbg_build_id;
-			get_hash_debug_directory (libc_ver_end, hash);
-			libc_ver_end = hash;
-		}
-
-		snprintf (path, sizeof (path), "%s%s", libc_ver, libc_ver_end);
-		ut64 vaddr = get_vaddr_symbol (path, symname);
-		if (libc_addr != UT64_MAX && vaddr && vaddr != UT64_MAX) {
-			m_arena = libc_addr + vaddr;
 			main_arena = R_NEW0 (RHeap_MallocState);
 			if (!main_arena) {
 				eprintf ("Warning: out of memory\n");
@@ -981,9 +995,7 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 			}
 			update_main_arena (core, m_arena, main_arena);
 			print_main_arena (m_arena, main_arena);
-			free (main_arena);
-		} else {
-			eprintf ("Warning: virtual address of symbol main_arena could not be found\n");
+			free (main_arena);	
 		}
 
 		}
