@@ -7,9 +7,9 @@
 
 #define TN_KEY_LEN 32
 #define TN_KEY_FMT "%"PFMT64u
-#define NBYTES sizeof(size_t)
 
-#include <byteswap.h>
+
+
 
 struct dot_trace_ght {
 	RGraph *graph;
@@ -797,66 +797,97 @@ beach:
 }
 
 static void update_main_arena(RCore *core, ut64 m_arena, RHeap_MallocState *main_arena) {
-	r_core_read_at (core, m_arena, (ut8 *) main_arena, sizeof(RHeap_MallocState));
+	r_core_read_at (core, m_arena, (ut8 *)main_arena, sizeof (RHeap_MallocState));
 }
 
+#define PRINTF_ARENA(color, fmt , ...) r_cons_printf (color fmt Color_RESET, __VA_ARGS__)
+#define PRINTF_GREEN_ARENA(fmt, ...) PRINTF_ARENA (Color_GREEN, fmt, __VA_ARGS__)
+#define PRINTF_BLUE_ARENA(fmt, ...) PRINTF_ARENA (Color_BLUE, fmt, __VA_ARGS__)
+
+#define PRINT_ARENA(color, msg) r_cons_print (color msg Color_RESET)
+#define PRINT_GREEN_ARENA(msg) PRINT_ARENA (Color_GREEN, msg)
+#define PRINT_BLUE_ARENA(msg) PRINT_ARENA (Color_BLUE, msg)
 static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
-	eprintf (Color_GREEN" main_arena @ "Color_RESET""Color_BLUE"0x%zx\n\n"Color_RESET, (size_t) m_arena);
-	eprintf (Color_GREEN"struct malloc_state main_arena {\n"Color_RESET);
-	eprintf (Color_GREEN"\tmutex = "Color_RESET""Color_BLUE" 0x%x"Color_RESET""Color_GREEN",\n"Color_RESET, (int) main_arena->mutex);		
-	eprintf (Color_GREEN"\tflags = "Color_RESET""Color_BLUE" 0x%x"Color_RESET""Color_GREEN",\n"Color_RESET, (int) main_arena->flags);
 	int i;
-	eprintf (Color_GREEN"\tfastbinsY = {"Color_RESET);
-	for (i = 0; i < NFASTBINS; i++) {
-		eprintf (Color_BLUE"0x%zx"Color_RESET, (size_t) main_arena->fastbinsY[i]);			
-		if (i < 9) 
-			eprintf (Color_GREEN","Color_RESET);			
-	}
-	eprintf (Color_GREEN"}\n"Color_RESET);
-	eprintf (Color_GREEN"\ttop = "Color_RESET""Color_BLUE" 0x%zx"Color_RESET""Color_GREEN",\n"Color_RESET, (size_t) main_arena->top);
-	eprintf (Color_GREEN"\tlast_remainder = "Color_RESET""Color_BLUE" 0x%zx"Color_RESET""Color_GREEN",\n"Color_RESET, (size_t) main_arena->last_remainder);
-	eprintf (Color_GREEN"\tbins {"Color_RESET);
-
 	bool isNull = false;
-	for (i = 0; i < NBINS * 2 - 2; i++) {
-		(i % 2 == 0) ? eprintf ("\n\t") : eprintf ("\t");
-		if (isNull) { 
-			eprintf (Color_BLUE"0x0 "Color_RESET""Color_GREEN"<repeats 254 times>"Color_RESET);
-			break;
-		} else eprintf (Color_BLUE" 0x%zx"Color_RESET""Color_GREEN" <main_arena+%04d>, "Color_RESET, (size_t) main_arena->bins[i], (size_t) main_arena->bins[i] - (size_t) m_arena);
-	}
+	PRINT_GREEN_ARENA ("main_arena @ ");
+	PRINTF_BLUE_ARENA ("0x%zx\n\n", (size_t) m_arena);
+	PRINT_GREEN_ARENA ("struct malloc_state main_arena {\n");
+	PRINT_GREEN_ARENA ("\tmutex = ");
+	PRINTF_BLUE_ARENA (" 0x%x\n", (int) main_arena->mutex);
+	PRINT_GREEN_ARENA ("\tflags = ");
+	PRINTF_BLUE_ARENA (" 0x%x\n", (int) main_arena->flags);
+	PRINT_GREEN_ARENA ("\tfastbinsY = {");
 
-	eprintf (Color_GREEN"\n\t}\t\n"Color_RESET);
-	eprintf (Color_GREEN"\tbinmap = {"Color_RESET);
-	for(i = 0; i < BINMAPSIZE; i++) {
-		eprintf (Color_BLUE"0x%x"Color_RESET, (ut8) main_arena->binmap[i]);
-		if (i < 3)
-			eprintf (Color_GREEN","Color_RESET);			
+	for (i = 0; i < NFASTBINS; i++) {
+		PRINTF_BLUE_ARENA ("0x%zx", (size_t)main_arena->fastbinsY[i]);
+		if (i < 9) {
+			PRINT_GREEN_ARENA (",");
+		}
 	}
-	eprintf (Color_GREEN"}\n"Color_RESET);
-	eprintf (Color_GREEN"\tnext = "Color_RESET""Color_BLUE" 0x%zx"Color_RESET""Color_GREEN",\n"Color_RESET, (size_t) main_arena->next);
-	eprintf (Color_GREEN"\tnext_free = "Color_RESET""Color_BLUE" 0x%zx"Color_RESET""Color_GREEN",\n"Color_RESET, (size_t) main_arena->next_free);
-	eprintf (Color_GREEN"\tsystem_mem = "Color_RESET""Color_BLUE" 0x%zx"Color_RESET""Color_GREEN",\n"Color_RESET, (size_t) main_arena->system_mem);
-	eprintf (Color_GREEN"\tmax_system_mem = "Color_RESET""Color_BLUE" 0x%zx"Color_RESET""Color_GREEN",\n"Color_RESET, (size_t) main_arena->max_system_mem);
-	eprintf (Color_GREEN"}\n\n"Color_RESET);
+	PRINT_GREEN_ARENA ("}\n");
+	PRINT_GREEN_ARENA ("\ttop = ");
+	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->top);
+	PRINT_GREEN_ARENA (",\n");
+	PRINT_GREEN_ARENA ("\tlast_remainder = ");
+	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->last_remainder);
+	PRINT_GREEN_ARENA (",\n");
+	PRINT_GREEN_ARENA ("\tbins {");
+
+	for (i = 0; i < NBINS * 2 - 2; i++) {
+		(i % 2 == 0) ? r_cons_print ("\n\t") : r_cons_print ("\t");
+		if (isNull) {
+			PRINT_BLUE_ARENA ("0x0 ");
+			PRINT_GREEN_ARENA ("<repeats 254 times>");
+			break;
+		} else {
+			PRINTF_BLUE_ARENA (" 0x%zx", (size_t)main_arena->bins[i]);
+			PRINTF_GREEN_ARENA (" <main_arena+%04d>, ", (size_t) main_arena->bins[i] - (size_t) m_arena);
+		}
+	}
+	PRINT_GREEN_ARENA ("\n\t}\t\n");
+	PRINT_GREEN_ARENA ("\tbinmap = {");
+
+	for(i = 0; i < BINMAPSIZE; i++) {
+		PRINTF_BLUE_ARENA ("0x%x", (ut8)main_arena->binmap[i]);
+		if (i < 3) {
+			PRINT_GREEN_ARENA (",");
+		}
+	}
+	PRINT_GREEN_ARENA ("}\n");
+	PRINT_GREEN_ARENA ("\tnext = ");
+	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->next);
+	PRINT_GREEN_ARENA (",\n");
+	PRINT_GREEN_ARENA ("\tnext_free = ");
+	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->next_free);
+	PRINT_GREEN_ARENA (",\n");
+	PRINT_GREEN_ARENA ("\tsystem_mem = ");
+	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->system_mem);
+	PRINT_GREEN_ARENA (",\n");
+	PRINT_GREEN_ARENA ("\tmax_system_mem = ");
+	PRINTF_BLUE_ARENA (" 0x%zx", (size_t) main_arena->max_system_mem);
+	PRINT_GREEN_ARENA (",\n");
+	PRINT_GREEN_ARENA ("}\n\n");
 }
 
 static ut64 get_vaddr_symbol(const char *path, const char *symname) {
 	RListIter *iter;
 	RBinSymbol *s;
 	RCore *core = r_core_new ();
+	RList * syms = NULL;
 	ut64 vaddr = 0LL;
 
+	if (!core) return UT64_MAX;
 	r_bin_load (core->bin, path, 0, 0, 0, -1, false);
-	RList *syms = r_bin_get_symbols (core->bin);
+	syms = r_bin_get_symbols (core->bin);
+	if (!syms) return UT64_MAX;
 	r_list_foreach (syms, iter, s) {
 		if (strstr (s->name, symname)) {
-			vaddr = s->vaddr;		
+			vaddr = s->vaddr;
 			break;
 		}
-	}	
+	}
 	r_core_free (core);
-
 	return vaddr;
 }
 
@@ -864,34 +895,40 @@ static void get_hash_debug_directory(const char *path, char *hash) {
 	RListIter *iter;
 	RBinSection *s;
 	RCore *core = r_core_new ();
+	RList * sects = NULL;
 	char buf[20] = {0};
+	int err, i, j = 0;
 
+	if (!core) return;
 	r_bin_load (core->bin, path, 0, 0, 0, -1, false);
-	RList *sects = r_bin_get_sections (core->bin);
+	sects = r_bin_get_sections (core->bin);
+	if (!sects) goto out_error;
 	r_list_foreach (sects, iter, s) {
 		if (strstr (s->name, ".note.gnu.build-id")) {
-			r_io_read_at (core->io, s->vaddr+16, (ut8 *) buf, 20);
+			err = r_io_read_at (core->io, s->vaddr + 16, (ut8 *) buf, 20);
+			if (!err) {
+				eprintf ("We couldn't read from memory\n");
+				goto out_error; 
+			}
 			break;
 		}
 	}
-	r_core_free (core);
-
-	int i, j = 0;
 	for (i = 0; i < 20; i++) {
-		if (i <= 1) 
+		if (i <= 1) {
 			hash[i + 2 * j++] = (ut8) '/';
-
+		}
 		sprintf (hash + j + 2 * i, "%02x", (ut8) buf[i]);
 	}
-
 	strcat (hash, ".debug");
+out_error:
+	r_core_free (core);
 }
 
 static int cmd_debug_map_heap(RCore *core, const char *input) {
 	const char* help_msg[] = {
 		"Usage:", "dmh", " # Memory map heap",
 		"dmha", "", "Struct Malloc State (main_arena)",
-		"dmh?", "", "",
+		"dmh?", "", "Show map heap help",
 		NULL
 	};
 
@@ -899,9 +936,8 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 	RDebugMap *map;
 	RHeap_MallocState *main_arena;
 	ut64 m_arena = UT64_MAX;
-	
+
 	switch (input[0]) {
-	
 	case 'a': // "dmha"
 		{
 		const char *dir_dbg = "/usr/lib/debug";
@@ -909,11 +945,10 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 		const char *symname = "main_arena";
 		const char *libc_ver = NULL;
 		const char *libc_ver_end = NULL;
-		char hash[64] = {0}, path[256] = {0};
+		char hash[64] = {0}, path[4096] = {0};
 		ut64 libc_addr = UT64_MAX;
-
-		r_debug_map_sync (core->dbg); 
-
+		if (!core || !core->dbg || !core->dbg->maps) break;
+		r_debug_map_sync (core->dbg);
 		r_list_foreach (core->dbg->maps, iter, map) {
 			if (strstr (map->name, "/libc-")) {
 				libc_addr = (SIZE_SZ == 4) ? (map->addr_end) : (map->addr);
@@ -924,37 +959,40 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 
 		if (!r_file_is_directory (dir_dbg)) {
 			eprintf ("Debug directory not found at /usr/lib, is libc<version>-dbg installed?\n");
-			break;			
+			break;
 		}
 
 		if (!r_file_is_directory (dir_dbg_build_id)) {
 			libc_ver = dir_dbg;
 		} else {
-			libc_ver = dir_dbg_build_id;	
-			get_hash_debug_directory (libc_ver_end, hash);		
+			libc_ver = dir_dbg_build_id;
+			get_hash_debug_directory (libc_ver_end, hash);
 			libc_ver_end = hash;
 		}
- 		
-		strcat (path, libc_ver);
-		strcat (path, libc_ver_end);
 
+		snprintf (path, sizeof (path), "%s%s", libc_ver, libc_ver_end);
 		ut64 vaddr = get_vaddr_symbol (path, symname);
-
-		if (libc_addr != UT64_MAX && vaddr) {
+		if (libc_addr != UT64_MAX && vaddr && vaddr != UT64_MAX) {
 			m_arena = libc_addr + vaddr;
 			main_arena = R_NEW0 (RHeap_MallocState);
+			if (!main_arena) {
+				eprintf ("Warning: out of memory\n");
+				break;
+			}
 			update_main_arena (core, m_arena, main_arena);
 			print_main_arena (m_arena, main_arena);
 			free (main_arena);
-		} else eprintf ("Warning: virtual address of symbol main_arena could not be found\n");	
+		} else {
+			eprintf ("Warning: virtual address of symbol main_arena could not be found\n");
+		}
 
 		}
 		break;
-	case '?':	
+	case '?':
 		r_core_cmd_help (core, help_msg);
 		break;
 	}
-	return true;	
+	return true;
 }
 
 static int cmd_debug_map(RCore *core, const char *input) {
@@ -1160,7 +1198,7 @@ static int cmd_debug_map(RCore *core, const char *input) {
 			r_cons_get_size (NULL));
 		break;
 	case 'h': // "dmh"
-#ifdef __linux__ && __GNU_LIBRARY__ && __GLIBC__ && __GLIBC_MINOR__
+#if __linux__ && __GNU_LIBRARY__ && __GLIBC__ && __GLIBC_MINOR__
 		cmd_debug_map_heap (core, input + 1);
 #else
 		eprintf ("GLIBC not installed\n");
@@ -2048,7 +2086,7 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 			break;
 		}
 		break;
-	case 'b': // "dbb"	
+	case 'b': // "dbb"
 		if (input[2]) {
 			core->dbg->bp->delta = (st64)r_num_math (core->num, input + 2);
 		} else {
@@ -2544,11 +2582,11 @@ static void r_core_debug_kill (RCore *core, const char *input) {
 			if (signum>0) {
 				signame = r_debug_signal_resolve_i (core->dbg, signum);
 				if (signame)
-                                	r_cons_println (signame);
+					r_cons_println (signame);
 			} else {
 				signum = r_debug_signal_resolve (core->dbg, arg);
 				if (signum > 0) {
-					r_cons_printf ("%d\n", signum);  
+					r_cons_printf ("%d\n", signum);
 				}
 			}
 		} else {
