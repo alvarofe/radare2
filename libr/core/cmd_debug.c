@@ -2594,7 +2594,7 @@ static void r_core_debug_kill (RCore *core, const char *input) {
 			if (signum>0) {
 				signame = r_debug_signal_resolve_i (core->dbg, signum);
 				if (signame)
-					r_cons_println (signame);
+                                	r_cons_println (signame);
 			} else {
 				signum = r_debug_signal_resolve (core->dbg, arg);
 				if (signum > 0) {
