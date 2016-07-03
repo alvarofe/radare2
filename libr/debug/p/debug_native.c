@@ -42,13 +42,14 @@ static int r_debug_native_reg_write (RDebug *dbg, int type, const ut8* buf, int 
 #endif
 
 #elif __BSD__
+#include <sys/sysctl.h>
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <kvm.h>
 #define R_DEBUG_REG_T struct reg
 #include "native/procfs.h"
 #if __KFBSD__
-#include <sys/sysctl.h>
 #include <sys/user.h>
 #endif
 #include "native/procfs.h"
@@ -67,6 +68,12 @@ static int r_debug_native_reg_write (RDebug *dbg, int type, const ut8* buf, int 
 #elif __linux__
 #include "native/linux/linux_debug.h"
 #include "native/procfs.h"
+# ifdef __ANDROID__
+#  define WAIT_ANY -1
+#  ifndef WIFCONTINUED
+#   define WIFCONTINUED(s) ((s) == 0xffff)
+#  endif
+# endif
 #if __x86_64__
 #include "native/linux/linux_coredump.h"
 #endif
@@ -76,6 +83,12 @@ static int r_debug_native_reg_write (RDebug *dbg, int type, const ut8* buf, int 
 #undef DEBUGGER
 #define DEBUGGER 0
 #endif // ARCH
+
+#ifdef __WALL
+#define WAITPID_FLAGS __WALL
+#else
+#define WAITPID_FLAGS 0
+#endif
 
 #endif /* IF DEBUGGER */
 
@@ -305,10 +318,10 @@ static RDebugReasonType r_debug_native_wait (RDebug *dbg, int pid) {
 	// XXX: this is blocking, ^C will be ignored
 #ifdef WAIT_ON_ALL_CHILDREN
 	//eprintf ("waiting on all children ...\n");
-	int ret = waitpid (-1, &status, WAIT_ANY); //__WALL);
+	int ret = waitpid (-1, &status, WAITPID_FLAGS);
 #else
 	//eprintf ("waiting on pid %d ...\n", pid);
-	int ret = waitpid (pid, &status, WAIT_ANY); //__WALL);
+	int ret = waitpid (pid, &status, WAITPID_FLAGS);
 #endif // WAIT_ON_ALL_CHILDREN
 	if (ret == -1) {
 		r_sys_perror ("waitpid");
@@ -344,7 +357,9 @@ static RDebugReasonType r_debug_native_wait (RDebug *dbg, int pid) {
 			eprintf ("child received signal %d\n", WTERMSIG (status));
 			reason = R_DEBUG_REASON_SIGNAL;
 		} else if (WIFSTOPPED (status)) {
-			eprintf ("child stopped with signal %d\n", WSTOPSIG (status));
+			if (WSTOPSIG (status) != SIGTRAP) {
+				eprintf ("child stopped with signal %d\n", WSTOPSIG (status));
+			}
 
 			/* this one might be good enough... */
 			dbg->reason.signum = WSTOPSIG (status);
@@ -416,7 +431,7 @@ static RList *r_debug_native_pids (int pid) {
 			if (p) r_list_append (list, p);
 		}
 	}
-#else
+#elif __linux__
 	int i;
 	char *ptr, buf[1024];
 
@@ -491,6 +506,35 @@ static RList *r_debug_native_pids (int pid) {
 			r_list_append (list, r_debug_pid_new (buf, i, 's', 0));
 		}
 	}
+#else /* rest is BSD */
+	struct kinfo_proc* kp;
+	int cnt = 0;
+	kvm_t* kd = kvm_openfiles (NULL, NULL, NULL, KVM_NO_FILES, NULL);
+	if (!kd) {
+		return NULL;
+	}
+
+	if (pid) {
+		kp = kvm_getprocs (kd, KERN_PROC_PID, pid, sizeof(*kp), &cnt);
+		if (cnt == 1) {
+			RDebugPid *p = r_debug_pid_new (kp->p_comm, pid, 's', 0);
+			if (p) r_list_append (list, p);
+			/* we got our processes, now fetch the parent process */
+			kp = kvm_getprocs (kd, KERN_PROC_PID, kp->p_ppid, sizeof(*kp), &cnt);
+                        if (cnt == 1) {
+				RDebugPid *p = r_debug_pid_new (kp->p_comm, kp->p_pid, 's', 0);
+				if (p) r_list_append (list, p);
+			}
+		}
+	} else {
+		kp = kvm_getprocs (kd, KERN_PROC_UID, geteuid(), sizeof(*kp), &cnt);
+		int i;
+		for (i = 0; i < cnt; i++) {
+			RDebugPid *p = r_debug_pid_new ((kp + i)->p_comm, (kp + i)->p_pid, 's', 0);
+			if (p) r_list_append (list, p);
+		}
+	}
+	kvm_close(kd);
 #endif
 	return list;
 }
@@ -757,6 +801,48 @@ static RList *r_debug_native_sysctl_map (RDebug *dbg) {
 	free (buf);
 	return list;
 }
+#elif __OpenBSD__
+static RList *r_debug_native_sysctl_map (RDebug *dbg) {
+	int mib[3];
+	size_t len;
+	struct kinfo_vmentry entry;
+	u_long old_end = 0;
+	RList *list = NULL;
+	RDebugMap *map;
+
+	len = sizeof(entry);
+	mib[0] = CTL_KERN;
+	mib[1] = KERN_PROC_VMMAP;
+	mib[2] = dbg->pid;
+	entry.kve_start = 0;
+
+	if (sysctl (mib, 3, &entry, &len, NULL, 0) == -1) {
+		eprintf ("Could not get memory map: %s\n", strerror(errno));
+		return NULL;
+	}
+
+	list = r_debug_map_list_new();
+	if (!list) return NULL;
+
+	while (sysctl (mib, 3, &entry, &len, NULL, 0) != -1) {
+		if (old_end == entry.kve_end) {
+			/* No more entries */
+			break;
+		}
+		/* path to vm obj is not included in kinfo_vmentry.
+		 * see usr.sbin/procmap for namei-cache lookup.
+		 */
+		map = r_debug_map_new ("", entry.kve_start, entry.kve_end,
+				entry.kve_protection, 0);
+		if (!map) break;
+		r_list_append (list, map);
+
+		entry.kve_start = entry.kve_start + 1;
+		old_end = entry.kve_end;
+	}
+
+	return list;
+}
 #endif
 
 static RDebugMap* r_debug_native_map_alloc (RDebug *dbg, ut64 addr, int size) {
@@ -851,6 +937,12 @@ static RList *r_debug_native_map_get (RDebug *dbg) {
 	/* prepend 0x prefix */
 	region[0] = region2[0] = '0';
 	region[1] = region2[1] = 'x';
+
+#if __OpenBSD__
+	/* OpenBSD has no procfs, so no idea trying. */
+	return r_debug_native_sysctl_map (dbg);
+#endif
+
 #if __KFBSD__
 	list = r_debug_native_sysctl_map (dbg);
 	if (list) {

@@ -80,7 +80,10 @@ R_API RFlag * r_flag_new() {
 		return NULL;
 	}
 	f->ht_name = r_hashtable64_new ();
+
 	f->ht_off = r_hashtable64_new ();
+	f->ht_off->free = (RHashFree)r_list_free;
+
 	for (i = 0; i < R_FLAG_SPACES_MAX; i++) {
 		f->spaces[i] = NULL;
 	}
@@ -88,13 +91,17 @@ R_API RFlag * r_flag_new() {
 }
 
 R_API void r_flag_item_free(RFlagItem *item) {
-	free (item->color);
-	free (item->comment);
-	free (item->alias);
-	/* release only one of the two pointers if they are the same */
-	if (item->name != item->realname) free (item->name);
-	free (item->realname);
-	free (item);
+	if (item) {
+		free (item->color);
+		free (item->comment);
+		free (item->alias);
+		/* release only one of the two pointers if they are the same */
+		if (item->name != item->realname) {
+			free (item->name); 
+		}
+		free (item->realname);
+		R_FREE (item);
+	}
 }
 
 R_API RFlag *r_flag_free(RFlag *f) {
@@ -310,6 +317,8 @@ R_API RFlagItem *r_flag_set(RFlag *f, const char *name, ut64 off, ut32 size) {
 			free (item);
 			return NULL;
 		}
+		//item share ownership prone to uaf, that is why only
+		//f->flags has set up free pointer
 		r_hashtable64_insert (f->ht_name, item->namehash, item);
 		r_list_append (f->flags, item);
 	}
@@ -388,7 +397,7 @@ R_API int r_flag_unset(RFlag *f, RFlagItem *item) {
 R_API int r_flag_unset_off(RFlag *f, ut64 off) {
 	RFlagItem *item = r_flag_get_i (f, off);
 	if (item && r_flag_unset (f, item)) {
-		free (item);
+		R_FREE (item);
 		return true;
 	}
 	return false;
@@ -420,7 +429,7 @@ R_API int r_flag_unset_name(RFlag *f, const char *name) {
 	ut64 hash = r_str_hash64 (name);
 	RFlagItem *item = r_hashtable64_lookup (f->ht_name, hash);
 	if (item && r_flag_unset (f, item)) {
-		free (item);
+		R_FREE (item);
 		return true;
 	}
 	return false;
@@ -433,12 +442,15 @@ R_API void r_flag_unset_all(RFlag *f) {
 	r_list_free (f->flags);
 	f->flags = r_list_new ();
 	if (!f->flags) return;
-	f->flags->free = (RListFree) r_flag_item_free;
+	f->flags->free = (RListFree)r_flag_item_free;
 
 	r_hashtable64_free (f->ht_name);
+	//don't set free since f->flags will free up items when needed avoiding uaf
 	f->ht_name = r_hashtable64_new ();
+
 	r_hashtable64_free (f->ht_off);
 	f->ht_off = r_hashtable64_new ();
+	f->ht_off->free = (RHashFree)r_list_free;
 
 	r_flag_space_unset (f, NULL);
 }

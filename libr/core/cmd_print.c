@@ -1588,11 +1588,7 @@ static void algolist(int mode) {
 		ut64 bits = ((ut64)1) << i;
 		const char *name = r_hash_name (bits);
 		if (!name || !*name) break;
-		if (mode) {
-			r_cons_println (name);
-		} else {
-			r_cons_println (name);
-		}
+		r_cons_println (name);
 	}
 	if (!mode) r_cons_newline ();
 }
@@ -2732,7 +2728,7 @@ static int cmd_print(void *data, const char *input) {
 							r_core_asm_bwdis_len (core, &instr_len, &addr, l);
 						}
 						ut64 prevaddr = core->offset;
-						r_core_seek(core, prevaddr - instr_len, true);
+						r_core_seek (core, prevaddr - instr_len, true);
 						block = realloc (block, R_MAX(instr_len, bs));
 						memcpy (block, core->block, bs);
 						r_core_read_at (core, addr+bs, block+bs, instr_len-bs); //core->blocksize);

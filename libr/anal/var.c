@@ -28,23 +28,25 @@ struct VarType {
 // kind = char? 'a'rg 'v'var (local, in frame), 'A' fast arg, register
 #endif
 
-R_API int r_anal_fcn_arg_add (RAnal *a, ut64 fna, int scope, int delta, const char *type, const char *name) {
+R_API int r_anal_fcn_arg_add(RAnal *a, ut64 fna, int scope, int delta, const char *type, const char *name) {
+	//XXX brocken and almost useless due to new implementation
 	return r_anal_var_add (a, fna, scope, delta, 'a', type, 4, name);
 }
 
-R_API int r_anal_fcn_var_add (RAnal *a, ut64 fna, int scope, int delta, const char *type, const char *name) {
+R_API int r_anal_fcn_var_add(RAnal *a, ut64 fna, int scope, int delta, const char *type, const char *name) {
+	//XXX same as the previous one
 	return r_anal_var_add (a, fna, scope, delta, 'v', type, 4, name);
 }
 
-R_API int r_anal_var_add (RAnal *a, ut64 addr, int scope, int delta, char kind, const char *type, int size, const char *name) {
+R_API int r_anal_var_add(RAnal *a, ut64 addr, int scope, int delta, char kind, const char *type, int size, const char *name) {
 	char *var_def;
-	if (!kind) kind ='v';
+	if (!kind) kind ='b';
 	if (!type) type = "int";
 //eprintf ("VAR ADD 0x%llx  - %d\n", addr, delta);
 	switch (kind) {
-	case 'a': // base pointer var/args
-	case 'v': // stack pointer var/args
-	case 'e': // registers args
+	case 'r': // base pointer var/args
+	case 'b': // stack pointer var/args
+	case 's': // registers args
 		break;
 	default:
 		eprintf ("Invalid var kind '%c'\n", kind);
@@ -78,9 +80,9 @@ R_API int r_anal_var_add (RAnal *a, ut64 addr, int scope, int delta, char kind, 
 	return true;
 }
 
-R_API int r_anal_var_retype (RAnal *a, ut64 addr, int scope, int delta, char kind, const char *type, int size, const char *name) {
+R_API int r_anal_var_retype(RAnal *a, ut64 addr, int scope, int delta, char kind, const char *type, int size, const char *name) {
 	char *var_def;
-	if (!kind) kind ='v';
+	if (!kind) kind ='b';
 	if (!type) type = "int";
 	if (size==-1) {
 		RAnalFunction *fcn = r_anal_get_fcn_in (a, addr, 0);
@@ -99,9 +101,9 @@ R_API int r_anal_var_retype (RAnal *a, ut64 addr, int scope, int delta, char kin
 		r_list_free (list);
 	}
 	switch (kind) {
-	case 'a':
-	case 'v':
-	case 'e':
+	case 'r':
+	case 'b':
+	case 's':
 		break;
 	default:
 		eprintf ("Invalid var kind '%c'\n", kind);
@@ -133,7 +135,7 @@ R_API int r_anal_var_retype (RAnal *a, ut64 addr, int scope, int delta, char kin
 	return true;
 }
 
-R_API int r_anal_var_delete_all (RAnal *a, ut64 addr, const char kind) {
+R_API int r_anal_var_delete_all(RAnal *a, ut64 addr, const char kind) {
 	RAnalFunction *fcn;
 	fcn = r_anal_get_fcn_in (a, addr, 0);
 	if (fcn) {
@@ -149,13 +151,10 @@ R_API int r_anal_var_delete_all (RAnal *a, ut64 addr, const char kind) {
 	return 0;
 }
 
-R_API int r_anal_var_delete (RAnal *a, ut64 addr, const char kind, int scope, int delta) {
-	RAnalVar *av;
-	av = r_anal_var_get (a, addr, kind, scope, delta);
-	if (!av) {
-		return false;
-	}
-	if (scope>0) {
+R_API int r_anal_var_delete(RAnal *a, ut64 addr, const char kind, int scope, int delta) {
+	RAnalVar *av = r_anal_var_get (a, addr, kind, scope, delta);
+	if (!av) return false;
+	if (scope > 0) {
 		char *sign = "";
 		if (delta < 0) {
 			delta = -delta;
@@ -168,19 +167,18 @@ R_API int r_anal_var_delete (RAnal *a, ut64 addr, const char kind, int scope, in
 		sdb_array_remove (DB, fcn_key, shortvar, 0);
 		sdb_unset (DB, var_key, 0);
 		sdb_unset (DB, name_key, 0);
-		if (*sign) {
-			delta = -delta;
-		}
+		if (*sign) delta = -delta;
 	} else {
 		char *var_global = sdb_fmt (1, "var.0x%"PFMT64x, addr);
 		char *var_def = sdb_fmt (2,"%c.%s,%d,%s", kind, av->type, av->size, av->name);
 		sdb_array_remove (DB, var_global, var_def, 0);
 	}
+	r_anal_var_free (av);
 	r_anal_var_access_clear (a, addr, scope, delta);
 	return true;
 }
 
-R_API bool r_anal_var_delete_byname (RAnal *a, RAnalFunction *fcn, int kind, const char *name) {
+R_API bool r_anal_var_delete_byname(RAnal *a, RAnalFunction *fcn, int kind, const char *name) {
 	char *varlist;
 	if (!a || !fcn) {
 		return false;
@@ -226,7 +224,7 @@ R_API bool r_anal_var_delete_byname (RAnal *a, RAnalFunction *fcn, int kind, con
 	return false;
 }
 
-R_API RAnalVar *r_anal_var_get_byname (RAnal *anal, RAnalFunction *fcn, char kind, const char* name) {
+R_API RAnalVar *r_anal_var_get_byname(RAnal *anal, RAnalFunction *fcn, char kind, const char* name) {
 	RList *var_list;
 	RListIter *iter;
 	RAnalVar *var = NULL, *itervar;
@@ -236,18 +234,23 @@ R_API RAnalVar *r_anal_var_get_byname (RAnal *anal, RAnalFunction *fcn, char kin
 	var_list = r_anal_var_list (anal, fcn, kind);
 	r_list_foreach (var_list, iter, itervar) {
 		if (!strcmp (name, itervar->name)) {
-			var = itervar;
-		} else {
-			r_anal_var_free (itervar);
-		}
+			var = calloc (1, sizeof(RAnalVar));
+			if (!var) return 0;
+			memcpy (var, itervar, sizeof(RAnalVar));
+			var->name = strdup (itervar->name);
+			var->type = strdup (itervar->type);
+			var->accesses = r_list_clone (itervar->accesses);
+			var->stores = r_list_clone (itervar->stores);
+			break;
+		} 
 	}
-	free (var_list);
+	r_list_free (var_list);
 	if (!var || strcmp (name, var->name)) {
 		return 0;
 	}
-	return  var;
+	return var;
 }
-R_API RAnalVar *r_anal_var_get (RAnal *a, ut64 addr, char kind, int scope, int delta) {
+R_API RAnalVar *r_anal_var_get(RAnal *a, ut64 addr, char kind, int scope, int delta) {
 	RAnalVar *av;
 	struct VarType vt;
 	char *sign = "";
@@ -289,11 +292,11 @@ R_API RAnalVar *r_anal_var_get (RAnal *a, ut64 addr, char kind, int scope, int d
 	return av;
 }
 
-R_API void r_anal_var_free (RAnalVar *av) {
+R_API void r_anal_var_free(RAnalVar *av) {
 	if (av) {
 		free (av->name);
 		free (av->type);
-		free (av);
+		R_FREE (av);
 	}
 }
 
@@ -460,6 +463,13 @@ R_API RList *r_anal_var_list(RAnal *a, RAnalFunction *fcn, int kind) {
 						r_list_free (list);
 						return NULL;
 					}
+					if (!vt.name || !vt.type) {
+						//This should be properly fixed
+						eprintf ("Warning null var in fcn.0x%"PFMT64x".%c.%s at %s-%d\n", 
+								fcn->addr, kind, word, __FILE__, __LINE__);
+						free (av);
+						continue;
+					}
 					av->delta = delta;
 					av->kind = kind;
 					av->name = strdup (vt.name);
@@ -499,38 +509,39 @@ R_API void r_anal_var_list_show(RAnal *anal, RAnalFunction *fcn, int kind, int m
 		switch (mode) {
 		case '*':
 			// we cant express all type info here :(
-			if (kind == 'v') { //registers
+			if (kind == 'r') { //registers
 				RRegItem *i = r_reg_index_get (anal->reg, var->delta);
 				if (!i) {
 					eprintf ("Register not found");
 					break;
 				}
-				anal->cb_printf ("af%c %s %s %s @ 0x%"PFMT64x"\n",
+				anal->cb_printf ("afv%c %s %s %s @ 0x%"PFMT64x"\n",
 					kind, i->name, var->name, var->type, fcn->addr);
 
 			} else {
-				anal->cb_printf ("af%c %d %s %s @ 0x%"PFMT64x"\n",
+				anal->cb_printf ("afv%c %d %s %s @ 0x%"PFMT64x"\n",
 					kind, var->delta, var->name, var->type,
 					fcn->addr);
 			}
 			break;
 		case 'j':
 			switch (var->kind) {
-			case 'a':
+			case 'b':
 				if (var->delta > 0) {
 					anal->cb_printf ("{\"name\":\"%s\","
-						"\"kind\":\"arg\",\"type\":\"%s\",\"ref\":\"%s+0x%x\"}",
+						"\"kind\":\"arg\",\"type\":\"%s\",\"ref\":"
+						"{\"base\":\"%s\", \"offset\":0x%x}}",
 						var->name, var->type,anal->reg->name[R_REG_NAME_BP],
 						var->delta);
 				} else {
 					anal->cb_printf ("{\"name\":\"%s\","
-						"\"kind\":\"var\",\"type\":\"%s\",\"ref\":\"%s-0x%x\"}",
+						"\"kind\":\"var\",\"type\":\"%s\",\"ref\":"
+						"{\"base\":\"%s\", \"offset\":-0x%x}}",
 						var->name, var->type,anal->reg->name[R_REG_NAME_BP],
 						-var->delta);
-
 				}
 				break;
-			case 'v':{
+			case 'r':{
 				RRegItem *i = r_reg_index_get (anal->reg, var->delta);
 				if (!i) {
 					eprintf ("Register not found");
@@ -541,15 +552,17 @@ R_API void r_anal_var_list_show(RAnal *anal, RAnalFunction *fcn, int kind, int m
 					var->name, var->type, i->name, anal->reg->name[var->delta]);
 				}
 				break;
-			case 'e':
+			case 's':
 				if (var->delta < fcn->stack) {
 					anal->cb_printf ("{\"name\":\"%s\","
-						"\"kind\":\"var\",\"type\":\"%s\",\"ref\":\"%s+0x%x\"}",
+						"\"kind\":\"arg\",\"type\":\"%s\",\"ref\":"
+						"{\"base\":\"%s\", \"offset\":0x%x}}",
 						var->name, var->type,anal->reg->name[R_REG_NAME_SP],
 						var->delta);
 				} else {
 					anal->cb_printf ("{\"name\":\"%s\","
-						"\"kind\":\"arg\",\"type\":\"%s\",\"ref\":\"%s-0x%x\"}",
+						"\"kind\":\"var\",\"type\":\"%s\",\"ref\":"
+						"{\"base\":\"%s\", \"offset\":-0x%x}}",
 						var->name, var->type,anal->reg->name[R_REG_NAME_SP],
 						var->delta);
 				}
@@ -561,7 +574,7 @@ R_API void r_anal_var_list_show(RAnal *anal, RAnalFunction *fcn, int kind, int m
 			break;
 		default:
 			switch (kind) {
-			case 'a':
+			case 'b':
 				if (var->delta > 0) {
 					anal->cb_printf ("arg %s %s @ %s+0x%x\n",
 						var->type, var->name,
@@ -574,7 +587,7 @@ R_API void r_anal_var_list_show(RAnal *anal, RAnalFunction *fcn, int kind, int m
 						-var->delta);
 				}
 				break;
-			case 'v': {
+			case 'r': {
 				RRegItem *i = r_reg_index_get (anal->reg, var->delta);
 				if (!i) {
 					eprintf("Register not found");
@@ -585,7 +598,7 @@ R_API void r_anal_var_list_show(RAnal *anal, RAnalFunction *fcn, int kind, int m
 					var->type, var->name, i->name);
 				}
 				break;
-			case 'e':
+			case 's':
 				if ( var->delta < fcn->stack) {
 					anal->cb_printf ("var %s %s @ %s+0x%x\n",
 						var->type, var->name,

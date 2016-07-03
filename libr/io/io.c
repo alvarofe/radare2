@@ -562,12 +562,13 @@ R_API ut64 r_io_read_i(RIO *io, ut64 addr, int sz) {
 }
 
 // TODO. this is a physical resize
-R_API int r_io_resize(RIO *io, ut64 newsize) {
+R_API bool r_io_resize(RIO *io, ut64 newsize) {
 	if (io->plugin) {
 		if (io->plugin->resize && io->desc) {
-			int res = io->plugin->resize (io, io->desc, newsize);
-			if (res)
+			bool res = io->plugin->resize (io, io->desc, newsize);
+			if (res) {
 				r_io_map_truncate_update (io, io->desc->fd, newsize);
+			}
 			return res;
 		}
 		return false;
@@ -745,16 +746,13 @@ R_API ut64 r_io_seek(RIO *io, ut64 offset, int whence) {
 	switch (whence) {
 	case R_IO_SEEK_SET:
 		posix_whence = SEEK_SET;
-		ret = offset;
 		break;
 	case R_IO_SEEK_CUR:
 		//		offset += io->off;
 		posix_whence = SEEK_CUR;
-		ret = offset + io->off;
 		break;
 	case R_IO_SEEK_END:
 		//offset = UT64_MAX; // XXX: depending on io bits?
-		ret = UT64_MAX;
 		posix_whence = SEEK_END;
 		break;
 	}

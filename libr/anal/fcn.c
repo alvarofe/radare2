@@ -210,7 +210,7 @@ static RAnalBlock* appendBasicBlock (RAnal *anal, RAnalFunction *fcn, ut64 addr)
 
 #define VARPREFIX "local"
 #define ARGPREFIX "arg"
-static char *get_varname (RAnal *a, RAnalFunction *fcn, char type, const char *pfx, int idx) {
+static char *get_varname(RAnal *a, RAnalFunction *fcn, char type, const char *pfx, int idx) {
 	char *varname = r_str_newf ("%s_%xh", pfx, idx);
 	int i = 2;
 	while (1) {
@@ -221,10 +221,9 @@ static char *get_varname (RAnal *a, RAnalFunction *fcn, char type, const char *p
 		if (!v) {
 			v = r_anal_var_get_byname (a, fcn, 'v', varname);
 		}
-		if (!v) {
-			break;
-		}
+		if (!v) break;
 		if (v->kind == type && R_ABS (v->delta) == idx) {
+			r_anal_var_free (v);
 			break;
 		}
 		free (varname);
@@ -232,8 +231,6 @@ static char *get_varname (RAnal *a, RAnalFunction *fcn, char type, const char *p
 		varname = r_str_newf ("%s_%xh_%d", pfx, idx, i);
 		i++;
 	}
-
-
 	return varname;
 }
 
@@ -332,7 +329,7 @@ void extract_arg (RAnal *anal, RAnalFunction *fcn, RAnalOp *op, const char *reg,
 	}
 	ptr = (st64)r_num_get (NULL, addr);
 	if(*sign =='+') {
-		if (ptr < fcn->stack &&  type == 'e') {
+		if (ptr < fcn->stack &&  type == 's') {
 			varname = get_varname (anal, fcn, type, VARPREFIX, R_ABS (ptr));
 		} else {
 			varname = get_varname (anal, fcn, type, ARGPREFIX, R_ABS (ptr));
@@ -351,12 +348,12 @@ void extract_arg (RAnal *anal, RAnalFunction *fcn, RAnalOp *op, const char *reg,
 }
 
 R_API void fill_args (RAnal *anal, RAnalFunction *fcn, RAnalOp *op) {
-	extract_arg (anal, fcn, op, anal->reg->name [R_REG_NAME_BP], "+", 'a');
-	extract_arg (anal, fcn, op, anal->reg->name [R_REG_NAME_BP], "-", 'a');
-	extract_arg (anal, fcn, op, anal->reg->name [R_REG_NAME_SP], "+", 'e');
-	extract_arg (anal, fcn, op, "bp", "+", 'a');
-	extract_arg (anal, fcn, op, "bp", "-", 'a');
-	extract_arg (anal, fcn, op, "sp", "+", 'e');
+	extract_arg (anal, fcn, op, anal->reg->name [R_REG_NAME_BP], "+", 'b');
+	extract_arg (anal, fcn, op, anal->reg->name [R_REG_NAME_BP], "-", 'b');
+	extract_arg (anal, fcn, op, anal->reg->name [R_REG_NAME_SP], "+", 's');
+	extract_arg (anal, fcn, op, "bp", "+", 'b');
+	extract_arg (anal, fcn, op, "bp", "-", 'b');
+	extract_arg (anal, fcn, op, "sp", "+", 's');
 
 }
 
@@ -536,24 +533,24 @@ repeat:
 		// TODO: use fcn->stack to know our stackframe
 		case R_ANAL_STACK_SET:
 			if ((int)op.ptr > 0) {
-				varname = get_varname (anal, fcn, 'a', ARGPREFIX, R_ABS(op.ptr));
+				varname = get_varname (anal, fcn, 'b', ARGPREFIX, R_ABS(op.ptr));
 			} else {
-				varname = get_varname (anal, fcn, 'a', VARPREFIX, R_ABS(op.ptr));
+				varname = get_varname (anal, fcn, 'b', VARPREFIX, R_ABS(op.ptr));
 			}
 			r_anal_var_add (anal, fcn->addr, 1, op.ptr,
-					'a', NULL, anal->bits/8, varname);
-			r_anal_var_access (anal, fcn->addr, 'a', 1, op.ptr, 1, op.addr);
+					'b', NULL, anal->bits/8, varname);
+			r_anal_var_access (anal, fcn->addr, 'b', 1, op.ptr, 1, op.addr);
 			free (varname);
 			break;
 		// TODO: use fcn->stack to know our stackframe
 		case R_ANAL_STACK_GET:
 			if (((int)op.ptr) > 0) {
-				varname = get_varname (anal, fcn, 'a', ARGPREFIX, R_ABS(op.ptr));
+				varname = get_varname (anal, fcn, 'b', ARGPREFIX, R_ABS(op.ptr));
 			} else {
-				varname = get_varname (anal, fcn, 'a', VARPREFIX, R_ABS(op.ptr));
+				varname = get_varname (anal, fcn, 'b', VARPREFIX, R_ABS(op.ptr));
 			}
-			r_anal_var_add (anal, fcn->addr, 1, op.ptr, 'a', NULL, anal->bits/8, varname);
-			r_anal_var_access (anal, fcn->addr, 'a', 1, op.ptr, 0, op.addr);
+			r_anal_var_add (anal, fcn->addr, 1, op.ptr, 'b', NULL, anal->bits/8, varname);
+			r_anal_var_access (anal, fcn->addr, 'b', 1, op.ptr, 0, op.addr);
 			free (varname);
 			break;
 		}

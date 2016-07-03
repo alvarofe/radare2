@@ -1262,12 +1262,18 @@ R_API void r_core_rtr_cmd(RCore *core, const char *input) {
 		return;
 	}
 	cmd_len = r_read_at_be32 (bufr, 1);
+	if (cmd_len < 1 || cmd_len > 16384) {
+		eprintf ("Error: cmd_len is wrong\n");
+		return;
+	}
 	cmd_output = calloc (1, cmd_len + 1);
 	if (!cmd_output) {
 		eprintf ("Error: Allocating cmd output\n");
 		return;
 	}
 	r_socket_read (fh, (ut8*)cmd_output, cmd_len);
+	//ensure the termination
+	cmd_output[cmd_len] = 0;
 	r_cons_println (cmd_output);
 	free ((void *)cmd_output);
 }

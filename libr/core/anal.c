@@ -1643,8 +1643,10 @@ static int fcn_print_detail(RCore *core, RAnalFunction *fcn) {
 		r_cons_printf ("afF @ 0x%08"PFMT64x"\n", fcn->addr);
 	fcn_list_bbs (fcn);
 	/* show variables  and arguments */
-	r_core_cmdf (core, "afa* @ 0x%"PFMT64x"\n", fcn->addr);
-	r_core_cmdf (core, "afv* @ 0x%"PFMT64x"\n", fcn->addr);
+	r_core_cmdf (core, "afvb* @ 0x%"PFMT64x"\n", fcn->addr);
+	r_core_cmdf (core, "afvr* @ 0x%"PFMT64x"\n", fcn->addr);
+	r_core_cmdf (core, "afvs* @ 0x%"PFMT64x"\n", fcn->addr);
+
 	free (name);
 	return 0;
 }
@@ -1819,7 +1821,7 @@ static RList *recurse(RCore *core, RAnalBlock *from, RAnalBlock *dest) {
 	return NULL;
 }
 
-R_API void fcn_callconv(RCore *core, RAnalFunction *fcn) {
+R_API void fcn_callconv (RCore *core, RAnalFunction *fcn) {
 	ut8 *tbuf, *buf;
 	RListIter *tmp = NULL;
 	RAnalBlock *bb = NULL;
@@ -1860,6 +1862,7 @@ R_API void fcn_callconv(RCore *core, RAnalFunction *fcn) {
 			r_anal_op (core->anal, &op, 0, buf + pos, sz);
 			op.addr = bb->addr + pos;
 			fill_args (core->anal, fcn, &op);
+			r_anal_op_fini (&op);
 		}
 	}
 
@@ -2341,10 +2344,12 @@ R_API int r_core_anal_all(RCore *core) {
 		r_list_foreach (core->anal->fcns, iter, fcni) {
 			if (core->cons->breaked)
 				break;
-			r_anal_var_delete_all (core->anal, fcni->addr, 'e');
-			r_anal_var_delete_all (core->anal, fcni->addr, 'a');
-			r_anal_var_delete_all (core->anal, fcni->addr, 'v');
-			fcn_callconv (core, fcni);
+			if (r_config_get_i (core->config, "anal.vars")) {
+				r_anal_var_delete_all (core->anal, fcni->addr, 'r');
+				r_anal_var_delete_all (core->anal, fcni->addr, 'b');
+				r_anal_var_delete_all (core->anal, fcni->addr, 's');
+				fcn_callconv (core, fcni);
+			}
 			if (!strncmp (fcni->name, "sym.", 4) || !strncmp (fcni->name, "main", 4))
 				fcni->type = R_ANAL_FCN_TYPE_SYM;
 		}
@@ -2831,7 +2836,7 @@ R_API void r_core_anal_esil(RCore *core, const char *str, const char *target) {
 	RAnalEsil *ESIL = core->anal->esil;
 	const char *pcname;
 	RAsmOp asmop;
-	RAnalOp op;
+	RAnalOp op = {0};
 	ut8 *buf = NULL;
 	int i, iend;
 	int minopsize = 4; // XXX this depends on asm->mininstrsize
@@ -2907,6 +2912,7 @@ R_API void r_core_anal_esil(RCore *core, const char *str, const char *target) {
 		}
 		r_cons_break (cccb, core);
 		cur = addr + i;
+		free (op.mnemonic);
 		if (!r_anal_op (core->anal, &op, cur, buf + i, iend - i)) {
 			i += minopsize - 1;
 		}
@@ -2956,16 +2962,13 @@ R_API void r_core_anal_esil(RCore *core, const char *str, const char *target) {
 						r_anal_ref_add (core->anal, dst, cur, 'd');
 					}
 				} else if ((core->anal->bits == 32 && !strcmp (core->anal->cpu, "mips"))) {
-				       ut64 dst = ESIL->cur;
-
+					ut64 dst = ESIL->cur;
 					if (!op.src[0] || !op.src[0]->reg || !op.src[0]->reg->name)
 						break;
-
 					if (!strcmp (op.src[0]->reg->name, "sp"))
 						break;
 					if (!strcmp (op.src[0]->reg->name, "zero"))
 						break;
-
 
 					if ((target && dst == ntarget) || !target) {
 						if (dst > 0xffff && op.src[1] && (dst & 0xffff) == (op.src[1]->imm & 0xffff) &&
@@ -3030,5 +3033,7 @@ R_API void r_core_anal_esil(RCore *core, const char *str, const char *target) {
 			}
 		}
 	}
+	free (buf);
+	free (op.mnemonic);
 	r_cons_break_end ();
 }
