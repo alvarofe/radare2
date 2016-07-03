@@ -809,7 +809,6 @@ static void update_main_arena(RCore *core, ut64 m_arena, RHeap_MallocState *main
 #define PRINT_BLUE_ARENA(msg) PRINT_ARENA (Color_BLUE, msg)
 static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
 	int i;
-	bool isNull = false;
 	PRINT_GREEN_ARENA ("main_arena @ ");
 	PRINTF_BLUE_ARENA ("0x%"PFMT64x"\n\n", (ut64)(size_t)m_arena);
 	PRINT_GREEN_ARENA ("struct malloc_state main_arena {\n");
@@ -836,7 +835,7 @@ static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
 
 	for (i = 0; i < NBINS * 2 - 2; i++) {
 		(i % 2 == 0) ? r_cons_print ("\n\t") : r_cons_print ("\t");
-		if (isNull) {
+		if (!main_arena->bins[i]) {
 			PRINT_BLUE_ARENA ("0x0 ");
 			PRINT_GREEN_ARENA ("<repeats 254 times>");
 			break;
@@ -955,6 +954,11 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 					libc_ver_end = map->name;
 					break;
 				}
+			}
+
+			if (!libc_ver_end) {
+				eprintf ("Warning: Is glibc mapped in memory? (see dm command)\n");
+				break;
 			}
 
 			snprintf (path, sizeof (path), "%s", libc_ver_end);
