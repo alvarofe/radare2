@@ -808,7 +808,7 @@ static void update_main_arena(RCore *core, ut64 m_arena, RHeap_MallocState *main
 #define PRINT_GREEN_ARENA(msg) PRINT_ARENA (Color_GREEN, msg)
 #define PRINT_BLUE_ARENA(msg) PRINT_ARENA (Color_BLUE, msg)
 static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
-	int i;
+	int i, offset;
 	PRINT_GREEN_ARENA ("main_arena @ ");
 	PRINTF_BLUE_ARENA ("0x%"PFMT64x"\n\n", (ut64)(size_t)m_arena);
 	PRINT_GREEN_ARENA ("struct malloc_state main_arena {\n");
@@ -833,6 +833,7 @@ static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
 	PRINT_GREEN_ARENA (",\n");
 	PRINT_GREEN_ARENA ("\tbins {");
 
+	offset = sizeof (main_arena->mutex) + sizeof (main_arena->flags) + sizeof (main_arena->fastbinsY) + sizeof (main_arena->top) + sizeof (main_arena->last_remainder);
 	for (i = 0; i < NBINS * 2 - 2; i++) {
 		(i % 2 == 0) ? r_cons_print ("\n\t") : r_cons_print ("\t");
 		if (!main_arena->bins[i]) {
@@ -841,7 +842,7 @@ static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
 			break;
 		} else {
 			PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->bins[i]);
-			PRINTF_GREEN_ARENA (" <main_arena+%04d>, ", (size_t)main_arena->bins[i] - (size_t)m_arena);
+			PRINTF_GREEN_ARENA (" <main_arena+%04d>, ", (size_t)offset + sizeof (size_t) * i);
 		}
 	}
 	PRINT_GREEN_ARENA ("\n\t}\t\n");
