@@ -928,6 +928,10 @@ out_error:
 	r_core_free (core);
 }
 
+bool startWith(const char *ptr, const char *str) {
+	return !strncmp(ptr, str, (size_t)strlen(str));
+}
+
 static int cmd_debug_map_heap(RCore *core, const char *input) {
 	const char* help_msg[] = {
 		"Usage:", "dmh", " # Memory map heap",
@@ -949,7 +953,9 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 			const char *dir_build_id = "/.build-id";
 			const char *symname = "main_arena";
 			const char *libc_ver_end = NULL;
-			char hash[64] = {0}, path[4096] = {0};
+			const char *custom_libc = NULL;
+			char hash[64] = {0}, path[1024] = {0};
+			bool is_debug_file[2]; 
 			ut64 libc_addr = UT64_MAX;
 			if (!core || !core->dbg || !core->dbg->maps) break;
 			r_debug_map_sync (core->dbg);
@@ -965,18 +971,31 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 				eprintf ("Warning: Is glibc mapped in memory? (see dm command)\n");
 				break;
 			}
+	
+			is_debug_file[0] = startWith (libc_ver_end, "/usr/lib/");
+			is_debug_file[1] = startWith (libc_ver_end, "/lib/");
 
-			snprintf (path, sizeof (path), "%s", libc_ver_end);
-			if (r_file_is_directory ("/usr/lib/debug") && !r_file_is_directory ("/usr/lib/debug/.build-id")) {
+			if (!is_debug_file[0] && !is_debug_file[1]) {
+				custom_libc = r_cons_input ("Is a custom library? (LD_PRELOAD=..)\nEnter full path glibc: ");
+				snprintf (path, sizeof (path), "%s", custom_libc);
+				goto arena;			
+			}
+
+			if (is_debug_file[0]) {
+				snprintf (path, sizeof (path), "%s", libc_ver_end);
+				goto arena;
+			}
+
+			if (is_debug_file[1] && r_file_is_directory ("/usr/lib/debug") && !r_file_is_directory ("/usr/lib/debug/.build-id")) {
 				snprintf (path, sizeof (path), "%s%s", dir_dbg, libc_ver_end);
 			} 
 
-			if (r_file_is_directory ("/usr/lib/debug/.build-id")) {
+			if (is_debug_file[1] && r_file_is_directory ("/usr/lib/debug/.build-id")) {
 				get_hash_debug_directory (libc_ver_end, hash);
 				libc_ver_end = hash;
 				snprintf (path, sizeof (path), "%s%s%s", dir_dbg, dir_build_id, libc_ver_end);
 			} 
-
+arena:
 			if (r_file_exists (path)) {
 				ut64 vaddr = get_vaddr_symbol (path, symname);
 				if (libc_addr != UT64_MAX && vaddr && vaddr != UT64_MAX) {
@@ -993,7 +1012,7 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 					eprintf ("Warning: virtual address of symbol main_arena could not be found. Is glibc<version>-dbg installed?\n");
 				}			
 			} else {
-				eprintf ("Fatal error: glibc library could not be found\n");			
+				eprintf ("Warning: glibc library with symbol main_arena could not be found. Is glibc<version>-dbg installed?\n");			
 			}
 		} else {
 			main_arena = R_NEW0 (RHeap_MallocState);
