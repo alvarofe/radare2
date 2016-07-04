@@ -833,23 +833,27 @@ static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
 	PRINT_GREEN_ARENA (",\n");
 	PRINT_GREEN_ARENA ("\tbins {");
 
-	offset = sizeof (main_arena->mutex) + sizeof (main_arena->flags) + sizeof (main_arena->fastbinsY) + sizeof (main_arena->top) + sizeof (main_arena->last_remainder);
-	for (i = 0; i < NBINS * 2 - 2; i++) {
-		(i % 2 == 0) ? r_cons_print ("\n\t") : r_cons_print ("\t");
+	offset = (size_t)&main_arena->last_remainder - (size_t)&main_arena->mutex + sizeof (size_t);
+	for (i = 0; i < NBINS * 2 - 2; i += 2) {
+		if (i % 2 == 0) r_cons_print ("\n\t");
 		if (!main_arena->bins[i]) {
 			PRINT_BLUE_ARENA ("0x0 ");
 			PRINT_GREEN_ARENA ("<repeats 254 times>");
 			break;
 		} else {
-			PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->bins[i]);
-			PRINTF_GREEN_ARENA (" <main_arena+%04d>, ", (size_t)offset + sizeof (size_t) * i);
+			PRINTF_GREEN_ARENA (" 0x%"PFMT64x"->fd = ", (size_t)m_arena + (size_t)offset + sizeof (size_t) * i - sizeof (size_t) * 2);
+			PRINTF_BLUE_ARENA ("0x%"PFMT64x, (ut64)(size_t)main_arena->bins[i]);
+			PRINT_GREEN_ARENA (", ");
+			PRINTF_GREEN_ARENA (" \t0x%"PFMT64x"->bk = ", (size_t)m_arena + (size_t)offset + sizeof (size_t) * i - sizeof (size_t) * 2);
+			PRINTF_BLUE_ARENA ("0x%"PFMT64x, (ut64)(size_t)main_arena->bins[i + 1]);
+			PRINT_GREEN_ARENA (", ");
 		}
 	}
 	PRINT_GREEN_ARENA ("\n\t}\t\n");
 	PRINT_GREEN_ARENA ("\tbinmap = {");
 
 	for(i = 0; i < BINMAPSIZE; i++) {
-		PRINTF_BLUE_ARENA ("0x%x", (ut8)main_arena->binmap[i]);
+		PRINTF_BLUE_ARENA ("0x%x", (int)main_arena->binmap[i]);
 		if (i < 3) {
 			PRINT_GREEN_ARENA (",");
 		}
