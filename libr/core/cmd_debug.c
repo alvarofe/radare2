@@ -970,7 +970,7 @@ static void r_resolve_main_arena(RCore *core, ut64 *m_arena) {
 	is_debug_file[1] = str_start_with (libc_ver_end, "/lib/");
 
 	if (!is_debug_file[0] && !is_debug_file[1]) {
-		custom_libc = r_cons_input ("Is a custom library? (LD_PRELOAD=..)\nEnter full path glibc: ");
+		custom_libc = r_cons_input ("Is a custom library? (LD_PRELOAD=..) Enter full path glibc: ");
 		snprintf (path, sizeof (path), "%s", custom_libc);
 		free (custom_libc);
 		goto arena;			
