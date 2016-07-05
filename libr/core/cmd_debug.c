@@ -797,78 +797,78 @@ static void update_main_arena(RCore *core, ut64 m_arena, RHeap_MallocState *main
 	r_core_read_at (core, m_arena, (ut8 *)main_arena, sizeof (RHeap_MallocState));
 }
 
-#define PRINTF_ARENA(color, fmt , ...) r_cons_printf (color fmt Color_RESET, __VA_ARGS__)
-#define PRINTF_GREEN_ARENA(fmt, ...) PRINTF_ARENA (Color_GREEN, fmt, __VA_ARGS__)
-#define PRINTF_BLUE_ARENA(fmt, ...) PRINTF_ARENA (Color_BLUE, fmt, __VA_ARGS__)
+#define PRINTF_A(color, fmt , ...) r_cons_printf (color fmt Color_RESET, __VA_ARGS__)
+#define PRINTF_GA(fmt, ...) PRINTF_A (Color_GREEN, fmt, __VA_ARGS__)
+#define PRINTF_BA(fmt, ...) PRINTF_A (Color_BLUE, fmt, __VA_ARGS__)
 
-#define PRINT_ARENA(color, msg) r_cons_print (color msg Color_RESET)
-#define PRINT_GREEN_ARENA(msg) PRINT_ARENA (Color_GREEN, msg)
-#define PRINT_BLUE_ARENA(msg) PRINT_ARENA (Color_BLUE, msg)
+#define PRINT_A(color, msg) r_cons_print (color msg Color_RESET)
+#define PRINT_GA(msg) PRINT_A (Color_GREEN, msg)
+#define PRINT_BA(msg) PRINT_A (Color_BLUE, msg)
 static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
 	int i, offset;
-	PRINT_GREEN_ARENA ("main_arena @ ");
-	PRINTF_BLUE_ARENA ("0x%"PFMT64x"\n\n", (ut64)(size_t)m_arena);
-	PRINT_GREEN_ARENA ("struct malloc_state main_arena {\n");
-	PRINT_GREEN_ARENA ("\tmutex = ");
-	PRINTF_BLUE_ARENA (" 0x%x\n", (int)main_arena->mutex);
-	PRINT_GREEN_ARENA ("\tflags = ");
-	PRINTF_BLUE_ARENA (" 0x%x\n", (int)main_arena->flags);
-	PRINT_GREEN_ARENA ("\tfastbinsY = {");
+	PRINT_GA ("main_arena @ ");
+	PRINTF_BA ("0x%"PFMT64x"\n\n", (ut64)(size_t)m_arena);
+	PRINT_GA ("struct malloc_state main_arena {\n");
+	PRINT_GA ("  mutex = ");
+	PRINTF_BA ("0x%x\n", (int)main_arena->mutex);
+	PRINT_GA ("  flags = ");
+	PRINTF_BA ("0x%x\n", (int)main_arena->flags);
+	PRINT_GA ("  fastbinsY = {");
 
 	for (i = 0; i < NFASTBINS; i++) {
-		PRINTF_BLUE_ARENA ("0x%"PFMT64x, (ut64)(size_t)main_arena->fastbinsY[i]);
+		PRINTF_BA ("0x%"PFMT64x, (ut64)(size_t)main_arena->fastbinsY[i]);
 		if (i < NFASTBINS - 1) {
-			PRINT_GREEN_ARENA (",");
+			PRINT_GA (",");
 		}
 	}
-	PRINT_GREEN_ARENA ("}\n");
-	PRINT_GREEN_ARENA ("\ttop = ");
-	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->top);
-	PRINT_GREEN_ARENA (",\n");
-	PRINT_GREEN_ARENA ("\tlast_remainder = ");
-	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->last_remainder);
-	PRINT_GREEN_ARENA (",\n");
-	PRINT_GREEN_ARENA ("\tbins {");
+	PRINT_GA ("}\n");
+	PRINT_GA ("  top = ");
+	PRINTF_BA ("0x%"PFMT64x, (ut64)(size_t)main_arena->top);
+	PRINT_GA (",\n");
+	PRINT_GA ("  last_remainder = ");
+	PRINTF_BA ("0x%"PFMT64x, (ut64)(size_t)main_arena->last_remainder);
+	PRINT_GA (",\n");
+	PRINT_GA ("  bins {");
 
 	offset = (size_t)&main_arena->last_remainder - (size_t)&main_arena->mutex + sizeof (size_t);
 	for (i = 0; i < NBINS * 2 - 2; i += 2) {
-		if (i % 2 == 0) r_cons_print ("\n\t");
+		if (i % 2 == 0) r_cons_print ("\n    ");
 		if (!main_arena->bins[i]) {
-			PRINT_BLUE_ARENA ("0x0 ");
-			PRINT_GREEN_ARENA ("<repeats 254 times>");
+			PRINT_BA ("0x0 ");
+			PRINT_GA ("<repeats 254 times>");
 			break;
 		} else {
-			PRINTF_GREEN_ARENA (" 0x%"PFMT64x"->fd = ", (size_t)m_arena + (size_t)offset + sizeof (size_t) * i - sizeof (size_t) * 2);
-			PRINTF_BLUE_ARENA ("0x%"PFMT64x, (ut64)(size_t)main_arena->bins[i]);
-			PRINT_GREEN_ARENA (", ");
-			PRINTF_GREEN_ARENA (" \t0x%"PFMT64x"->bk = ", (size_t)m_arena + (size_t)offset + sizeof (size_t) * i - sizeof (size_t) * 2);
-			PRINTF_BLUE_ARENA ("0x%"PFMT64x, (ut64)(size_t)main_arena->bins[i + 1]);
-			PRINT_GREEN_ARENA (", ");
+			PRINTF_GA ("0x%"PFMT64x"->fd = ", (size_t)m_arena + (size_t)offset + sizeof (size_t) * i - sizeof (size_t) * 2);
+			PRINTF_BA ("0x%"PFMT64x, (ut64)(size_t)main_arena->bins[i]);
+			PRINT_GA (", ");
+			PRINTF_GA ("0x%"PFMT64x"->bk = ", (size_t)m_arena + (size_t)offset + sizeof (size_t) * i - sizeof (size_t) * 2);
+			PRINTF_BA ("0x%"PFMT64x, (ut64)(size_t)main_arena->bins[i + 1]);
+			PRINT_GA (", ");
 		}
 	}
-	PRINT_GREEN_ARENA ("\n\t}\t\n");
-	PRINT_GREEN_ARENA ("\tbinmap = {");
+	PRINT_GA ("\n  }\n");
+	PRINT_GA ("  binmap = {");
 
 	for(i = 0; i < BINMAPSIZE; i++) {
-		PRINTF_BLUE_ARENA ("0x%x", (int)main_arena->binmap[i]);
+		PRINTF_BA ("0x%x", (int)main_arena->binmap[i]);
 		if (i < BINMAPSIZE - 1) {
-			PRINT_GREEN_ARENA (",");
+			PRINT_GA (",");
 		}
 	}
-	PRINT_GREEN_ARENA ("}\n");
-	PRINT_GREEN_ARENA ("\tnext = ");
-	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->next);
-	PRINT_GREEN_ARENA (",\n");
-	PRINT_GREEN_ARENA ("\tnext_free = ");
-	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->next_free);
-	PRINT_GREEN_ARENA (",\n");
-	PRINT_GREEN_ARENA ("\tsystem_mem = ");
-	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->system_mem);
-	PRINT_GREEN_ARENA (",\n");
-	PRINT_GREEN_ARENA ("\tmax_system_mem = ");
-	PRINTF_BLUE_ARENA (" 0x%"PFMT64x, (ut64)(size_t)main_arena->max_system_mem);
-	PRINT_GREEN_ARENA (",\n");
-	PRINT_GREEN_ARENA ("}\n\n");
+	PRINT_GA ("}\n");
+	PRINT_GA ("  next = ");
+	PRINTF_BA ("0x%"PFMT64x, (ut64)(size_t)main_arena->next);
+	PRINT_GA (",\n");
+	PRINT_GA ("  next_free = ");
+	PRINTF_BA ("0x%"PFMT64x, (ut64)(size_t)main_arena->next_free);
+	PRINT_GA (",\n");
+	PRINT_GA ("  system_mem = ");
+	PRINTF_BA ("0x%"PFMT64x, (ut64)(size_t)main_arena->system_mem);
+	PRINT_GA (",\n");
+	PRINT_GA ("  max_system_mem = ");
+	PRINTF_BA ("0x%"PFMT64x, (ut64)(size_t)main_arena->max_system_mem);
+	PRINT_GA (",\n");
+	PRINT_GA ("}\n\n");
 }
 
 static ut64 get_vaddr_symbol(const char *path, const char *symname) {
