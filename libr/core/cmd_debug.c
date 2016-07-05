@@ -8,9 +8,6 @@
 #define TN_KEY_LEN 32
 #define TN_KEY_FMT "%"PFMT64u
 
-
-
-
 struct dot_trace_ght {
 	RGraph *graph;
 	Sdb *graphnodes;
@@ -820,7 +817,7 @@ static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
 
 	for (i = 0; i < NFASTBINS; i++) {
 		PRINTF_BLUE_ARENA ("0x%"PFMT64x, (ut64)(size_t)main_arena->fastbinsY[i]);
-		if (i < 9) {
+		if (i < NFASTBINS - 1) {
 			PRINT_GREEN_ARENA (",");
 		}
 	}
@@ -854,7 +851,7 @@ static void print_main_arena(ut64 m_arena, RHeap_MallocState *main_arena) {
 
 	for(i = 0; i < BINMAPSIZE; i++) {
 		PRINTF_BLUE_ARENA ("0x%x", (int)main_arena->binmap[i]);
-		if (i < 3) {
+		if (i < BINMAPSIZE - 1) {
 			PRINT_GREEN_ARENA (",");
 		}
 	}
@@ -881,10 +878,14 @@ static ut64 get_vaddr_symbol(const char *path, const char *symname) {
 	RList * syms = NULL;
 	ut64 vaddr = 0LL;
 
-	if (!core) return UT64_MAX;
+	if (!core) {
+		return UT64_MAX;
+	}
 	r_bin_load (core->bin, path, 0, 0, 0, -1, false);
 	syms = r_bin_get_symbols (core->bin);
-	if (!syms) return UT64_MAX;
+	if (!syms) {
+		return UT64_MAX;
+	}
 	r_list_foreach (syms, iter, s) {
 		if (strstr (s->name, symname)) {
 			vaddr = s->vaddr;
@@ -895,18 +896,22 @@ static ut64 get_vaddr_symbol(const char *path, const char *symname) {
 	return vaddr;
 }
 
-static void get_hash_debug_directory(const char *path, char *hash) {
+static void get_hash_debug_file(const char *path, char *hash, int hash_len) {
 	RListIter *iter;
 	RBinSection *s;
 	RCore *core = r_core_new ();
 	RList * sects = NULL;
 	char buf[20] = {0};
-	int err, i, j = 0;
+	int offset, err, i, j = 0;
 
-	if (!core) return;
+	if (!core) {
+		return;
+	}
 	r_bin_load (core->bin, path, 0, 0, 0, -1, false);
 	sects = r_bin_get_sections (core->bin);
-	if (!sects) goto out_error;
+	if (!sects) {
+		goto out_error;
+	}
 	r_list_foreach (sects, iter, s) {
 		if (strstr (s->name, ".note.gnu.build-id")) {
 			err = r_io_read_at (core->io, s->vaddr + 16, (ut8 *) buf, 20);
@@ -921,18 +926,94 @@ static void get_hash_debug_directory(const char *path, char *hash) {
 		if (i <= 1) {
 			hash[i + 2 * j++] = (ut8) '/';
 		}
-		snprintf (hash + j + 2 * i, sizeof (hash), "%02x", (ut8) buf[i]);
+		offset = j + 2 * i;
+		snprintf (hash + offset, hash_len - offset, "%02x", (ut8) buf[i]);
 	}
-	strcat (hash, ".debug");
+	offset = j + 2 * i;
+	snprintf (hash + offset, hash_len - offset - strlen (".debug"), ".debug");
 out_error:
 	r_core_free (core);
 }
 
-bool startWith(const char *ptr, const char *str) {
-	return !strncmp(ptr, str, (size_t)strlen(str));
+bool str_start_with(const char *ptr, const char *str) {
+	return !strncmp (ptr, str, (size_t)strlen (str));
+}
+
+static void r_resolve_main_arena(RCore *core, ut64 m_arena) {
+	RDebugMap *map;	
+	RListIter *iter;
+	const char *dir_dbg = "/usr/lib/debug";
+	const char *dir_build_id = "/.build-id";
+	const char *symname = "main_arena";
+	const char *libc_ver_end = NULL; 
+	char hash[64] = {0}, path[1024] = {0};
+	char *custom_libc = NULL;
+	bool is_debug_file[2];
+	ut64 libc_addr = UT64_MAX;
+
+	if (!core || !core->dbg || !core->dbg->maps) return;
+	r_debug_map_sync (core->dbg);
+	r_list_foreach (core->dbg->maps, iter, map) {
+		if (strstr (map->name, "/libc-")) {
+			libc_addr = (SIZE_SZ == 4) ? (map->addr_end) : (map->addr);
+			libc_ver_end = map->name;
+			break;
+		}
+	}
+
+	if (!libc_ver_end) {
+		eprintf ("Warning: Is glibc mapped in memory? (see dm command)\n");
+		return;
+	}
+
+	is_debug_file[0] = str_start_with (libc_ver_end, "/usr/lib/");
+	is_debug_file[1] = str_start_with (libc_ver_end, "/lib/");
+
+	if (!is_debug_file[0] && !is_debug_file[1]) {
+		custom_libc = r_cons_input ("Is a custom library? (LD_PRELOAD=..)\nEnter full path glibc: ");
+		snprintf (path, sizeof (path), "%s", custom_libc);
+		free (custom_libc);
+		goto arena;			
+	}
+
+	if (is_debug_file[0]) {
+		snprintf (path, sizeof (path), "%s", libc_ver_end);
+		goto arena;
+	}
+
+	if (is_debug_file[1] && r_file_is_directory ("/usr/lib/debug") && !r_file_is_directory ("/usr/lib/debug/.build-id")) {
+		snprintf (path, sizeof (path), "%s%s", dir_dbg, libc_ver_end);
+	} 
+
+	if (is_debug_file[1] && r_file_is_directory ("/usr/lib/debug/.build-id")) {
+		get_hash_debug_file (libc_ver_end, hash, sizeof (hash));
+		libc_ver_end = hash;
+		snprintf (path, sizeof (path), "%s%s%s", dir_dbg, dir_build_id, libc_ver_end);
+	} 
+arena:
+	if (r_file_exists (path)) {
+		ut64 vaddr = get_vaddr_symbol (path, symname);
+		if (libc_addr != UT64_MAX && vaddr && vaddr != UT64_MAX) {
+			m_arena = libc_addr + vaddr;
+			RHeap_MallocState *main_arena = R_NEW0 (RHeap_MallocState);
+			if (!main_arena) {
+				eprintf ("Warning: out of memory\n");
+				return;
+			}
+			update_main_arena (core, m_arena, main_arena);
+			print_main_arena (m_arena, main_arena);
+			free (main_arena);
+		} else {
+			eprintf ("Warning: virtual address of symbol main_arena could not be found.\n");
+		}			
+	} else {
+		eprintf ("Warning: glibc library with symbol main_arena could not be found.\n");			
+	}
 }
 
 static int cmd_debug_map_heap(RCore *core, const char *input) {
+	RHeap_MallocState *main_arena;
+	static ut64 m_arena = UT64_MAX;	
 	const char* help_msg[] = {
 		"Usage:", "dmh", " # Memory map heap",
 		"dmha", "", "Struct Malloc State (main_arena)",
@@ -940,80 +1021,10 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 		NULL
 	};
 
-	RListIter *iter;
-	RDebugMap *map;
-	RHeap_MallocState *main_arena;
-	static ut64 m_arena = UT64_MAX;
-
 	switch (input[0]) {
 	case 'a': // "dmha"
-		{
 		if (m_arena == UT64_MAX) {
-			const char *dir_dbg = "/usr/lib/debug";
-			const char *dir_build_id = "/.build-id";
-			const char *symname = "main_arena";
-			const char *libc_ver_end = NULL;
-			const char *custom_libc = NULL;
-			char hash[64] = {0}, path[1024] = {0};
-			bool is_debug_file[2]; 
-			ut64 libc_addr = UT64_MAX;
-			if (!core || !core->dbg || !core->dbg->maps) break;
-			r_debug_map_sync (core->dbg);
-			r_list_foreach (core->dbg->maps, iter, map) {
-				if (strstr (map->name, "/libc-")) {
-					libc_addr = (SIZE_SZ == 4) ? (map->addr_end) : (map->addr);
-					libc_ver_end = map->name;
-					break;
-				}
-			}
-
-			if (!libc_ver_end) {
-				eprintf ("Warning: Is glibc mapped in memory? (see dm command)\n");
-				break;
-			}
-	
-			is_debug_file[0] = startWith (libc_ver_end, "/usr/lib/");
-			is_debug_file[1] = startWith (libc_ver_end, "/lib/");
-
-			if (!is_debug_file[0] && !is_debug_file[1]) {
-				custom_libc = r_cons_input ("Is a custom library? (LD_PRELOAD=..)\nEnter full path glibc: ");
-				snprintf (path, sizeof (path), "%s", custom_libc);
-				goto arena;			
-			}
-
-			if (is_debug_file[0]) {
-				snprintf (path, sizeof (path), "%s", libc_ver_end);
-				goto arena;
-			}
-
-			if (is_debug_file[1] && r_file_is_directory ("/usr/lib/debug") && !r_file_is_directory ("/usr/lib/debug/.build-id")) {
-				snprintf (path, sizeof (path), "%s%s", dir_dbg, libc_ver_end);
-			} 
-
-			if (is_debug_file[1] && r_file_is_directory ("/usr/lib/debug/.build-id")) {
-				get_hash_debug_directory (libc_ver_end, hash);
-				libc_ver_end = hash;
-				snprintf (path, sizeof (path), "%s%s%s", dir_dbg, dir_build_id, libc_ver_end);
-			} 
-arena:
-			if (r_file_exists (path)) {
-				ut64 vaddr = get_vaddr_symbol (path, symname);
-				if (libc_addr != UT64_MAX && vaddr && vaddr != UT64_MAX) {
-					m_arena = libc_addr + vaddr;
-					main_arena = R_NEW0 (RHeap_MallocState);
-					if (!main_arena) {
-						eprintf ("Warning: out of memory\n");
-						break;
-					}
-					update_main_arena (core, m_arena, main_arena);
-					print_main_arena (m_arena, main_arena);
-					free (main_arena);
-				} else {
-					eprintf ("Warning: virtual address of symbol main_arena could not be found. Is glibc<version>-dbg installed?\n");
-				}			
-			} else {
-				eprintf ("Warning: glibc library with symbol main_arena could not be found. Is glibc<version>-dbg installed?\n");			
-			}
+			r_resolve_main_arena (core, m_arena);
 		} else {
 			main_arena = R_NEW0 (RHeap_MallocState);
 			if (!main_arena) {
@@ -1023,8 +1034,6 @@ arena:
 			update_main_arena (core, m_arena, main_arena);
 			print_main_arena (m_arena, main_arena);
 			free (main_arena);	
-		}
-
 		}
 		break;
 	case '?':
