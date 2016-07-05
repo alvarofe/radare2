@@ -939,7 +939,7 @@ bool str_start_with(const char *ptr, const char *str) {
 	return !strncmp (ptr, str, (size_t)strlen (str));
 }
 
-static void r_resolve_main_arena(RCore *core, ut64 m_arena) {
+static void r_resolve_main_arena(RCore *core, ut64 *m_arena) {
 	RDebugMap *map;	
 	RListIter *iter;
 	const char *dir_dbg = "/usr/lib/debug";
@@ -994,20 +994,20 @@ arena:
 	if (r_file_exists (path)) {
 		ut64 vaddr = get_vaddr_symbol (path, symname);
 		if (libc_addr != UT64_MAX && vaddr && vaddr != UT64_MAX) {
-			m_arena = libc_addr + vaddr;
+			*m_arena = libc_addr + vaddr;
 			RHeap_MallocState *main_arena = R_NEW0 (RHeap_MallocState);
 			if (!main_arena) {
 				eprintf ("Warning: out of memory\n");
 				return;
 			}
-			update_main_arena (core, m_arena, main_arena);
-			print_main_arena (m_arena, main_arena);
+			update_main_arena (core, *m_arena, main_arena);
+			print_main_arena (*m_arena, main_arena);
 			free (main_arena);
 		} else {
-			eprintf ("Warning: virtual address of symbol main_arena could not be found.\n");
+			eprintf ("Warning: virtual address of symbol main_arena could not be found. Is libc6-dbg installed?\n");
 		}			
 	} else {
-		eprintf ("Warning: glibc library with symbol main_arena could not be found.\n");			
+		eprintf ("Warning: glibc library with symbol main_arena could not be found. Is libc6-dbg installed?\n");			
 	}
 }
 
@@ -1024,7 +1024,7 @@ static int cmd_debug_map_heap(RCore *core, const char *input) {
 	switch (input[0]) {
 	case 'a': // "dmha"
 		if (m_arena == UT64_MAX) {
-			r_resolve_main_arena (core, m_arena);
+			r_resolve_main_arena (core, &m_arena);
 		} else {
 			main_arena = R_NEW0 (RHeap_MallocState);
 			if (!main_arena) {
