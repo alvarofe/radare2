@@ -6,48 +6,56 @@
 extern "C" {
 #endif
 
+R_LIB_VERSION_HEADER(r_heap_glibc);
+
 #define NBINS 128
 #define NSMALLBINS 64
 #define NFASTBINS 10
 #define BINMAPSHIFT 5
 #define BITSPERMAP (1U << BINMAPSHIFT)
 #define BINMAPSIZE (NBINS / BITSPERMAP)
+#define SZ core->dbg->bits
 #define INTERNAL_SIZE_T size_t
 #define MAX(a,b) (((a)>(b))?(a):(b))
 #define MALLOC_ALIGNMENT MAX (2 * sizeof (INTERNAL_SIZE_T),  __alignof__ (long double))
 #define MALLOC_ALIGN_MASK (MALLOC_ALIGNMENT - 1)
-#define SIZE_SZ (sizeof (INTERNAL_SIZE_T))
+#define SIZE_SZ sizeof (INTERNAL_SIZE_T)
 #define NPAD -6
 
-#define largebin_index_32(sz)                                                \
-(((((ut32)(sz)) >>  6) <= 38)?  56 + (((ut32)(sz)) >>  6): \
- ((((ut32)(sz)) >>  9) <= 20)?  91 + (((ut32)(sz)) >>  9): \
- ((((ut32)(sz)) >> 12) <= 10)? 110 + (((ut32)(sz)) >> 12): \
- ((((ut32)(sz)) >> 15) <=  4)? 119 + (((ut32)(sz)) >> 15): \
- ((((ut32)(sz)) >> 18) <=  2)? 124 + (((ut32)(sz)) >> 18): \
+#define largebin_index_32(size)                                                \
+(((((ut32)(size)) >>  6) <= 38)?  56 + (((ut32)(size)) >>  6): \
+ ((((ut32)(size)) >>  9) <= 20)?  91 + (((ut32)(size)) >>  9): \
+ ((((ut32)(size)) >> 12) <= 10)? 110 + (((ut32)(size)) >> 12): \
+ ((((ut32)(size)) >> 15) <=  4)? 119 + (((ut32)(size)) >> 15): \
+ ((((ut32)(size)) >> 18) <=  2)? 124 + (((ut32)(size)) >> 18): \
 					126)
-#define largebin_index_32_big(sz)                                            \
-(((((ut32)(sz)) >>  6) <= 45)?  49 + (((ut32)(sz)) >>  6): \
- ((((ut32)(sz)) >>  9) <= 20)?  91 + (((ut32)(sz)) >>  9): \
- ((((ut32)(sz)) >> 12) <= 10)? 110 + (((ut32)(sz)) >> 12): \
- ((((ut32)(sz)) >> 15) <=  4)? 119 + (((ut32)(sz)) >> 15): \
- ((((ut32)(sz)) >> 18) <=  2)? 124 + (((ut32)(sz)) >> 18): \
+#define largebin_index_32_big(size)                                            \
+(((((ut32)(size)) >>  6) <= 45)?  49 + (((ut32)(size)) >>  6): \
+ ((((ut32)(size)) >>  9) <= 20)?  91 + (((ut32)(size)) >>  9): \
+ ((((ut32)(size)) >> 12) <= 10)? 110 + (((ut32)(size)) >> 12): \
+ ((((ut32)(size)) >> 15) <=  4)? 119 + (((ut32)(size)) >> 15): \
+ ((((ut32)(size)) >> 18) <=  2)? 124 + (((ut32)(size)) >> 18): \
                                         126)
-#define largebin_index_64(sz)                                                \
-(((((ut32)(sz)) >>  6) <= 48)?  48 + (((ut32)(sz)) >>  6): \
- ((((ut32)(sz)) >>  9) <= 20)?  91 + (((ut32)(sz)) >>  9): \
- ((((ut32)(sz)) >> 12) <= 10)? 110 + (((ut32)(sz)) >> 12): \
- ((((ut32)(sz)) >> 15) <=  4)? 119 + (((ut32)(sz)) >> 15): \
- ((((ut32)(sz)) >> 18) <=  2)? 124 + (((ut32)(sz)) >> 18): \
+#define largebin_index_64(size)                                                \
+(((((ut32)(size)) >>  6) <= 48)?  48 + (((ut32)(size)) >>  6): \
+ ((((ut32)(size)) >>  9) <= 20)?  91 + (((ut32)(size)) >>  9): \
+ ((((ut32)(size)) >> 12) <= 10)? 110 + (((ut32)(size)) >> 12): \
+ ((((ut32)(size)) >> 15) <=  4)? 119 + (((ut32)(size)) >> 15): \
+ ((((ut32)(size)) >> 18) <=  2)? 124 + (((ut32)(size)) >> 18): \
 					126)
-#define largebin_index(sz) \
-  (SIZE_SZ == 8 ? largebin_index_64 (sz)                                     \
-   : MALLOC_ALIGNMENT == 16 ? largebin_index_32_big (sz)                     \
-   : largebin_index_32 (sz))
+/* emulation 32 bit on 64 not work
+#define largebin_index(size) \
+  (SZ == 8 ? largebin_index_64 (size)                                     \
+   : MALLOC_ALIGNMENT == 16 ? largebin_index_32_big (size)                     \
+   : largebin_index_32 (size))
+*/
+
+#define largebin_index(size) \
+  (SZ == 8 ? largebin_index_64 (size) : largebin_index_32 (size))
 
 typedef struct r_malloc_chunk {
 	INTERNAL_SIZE_T      prev_size;	 /* Size of previous chunk (if free).  */
-	INTERNAL_SIZE_T      size;       /* Size in bytes, including overhead. */
+	INTERNAL_SIZE_T      size;       	 /* Size in bytes, including overhead. */
 
 	struct r_malloc_chunk* fd;          /* double links -- used only if free. */
 	struct r_malloc_chunk* bk;
@@ -61,7 +69,6 @@ typedef RHeapChunk *mfastbinptr;
 typedef RHeapChunk *mchunkptr;
 
 typedef struct r_malloc_state { 
-	/* mutex_t mutex; */
 	int mutex; 					/* serialized access */ 
 	int flags; 					/* flags */
 	mfastbinptr fastbinsY[NFASTBINS];		/* array of fastchunks */
