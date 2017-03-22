@@ -1,14 +1,15 @@
-/* radare - LGPL - Copyright 2009-2016 - pancake */
+/* radare - LGPL - Copyright 2009-2017 - pancake */
 
 #include <r_diff.h>
 #include <r_core.h>
 #include <r_hash.h>
 
-#define RED     "\x1b[31m"
-#define GREEN   "\x1b[32m"
+#include "../blob/version.c"
 
 enum {
 	MODE_DIFF,
+	MODE_DIFF_STRS,
+	MODE_DIFF_IMPORTS,
 	MODE_DIST,
 	MODE_DIST_LEVENSTEIN,
 	MODE_CODE,
@@ -26,6 +27,8 @@ static int showbare = false;
 static int json_started = 0;
 static int diffmode = 0;
 static bool disasm = false;
+static bool pdc = false;
+static bool quiet = false;
 static RCore *core = NULL;
 static const char *arch = NULL;
 static int bits = 0;
@@ -45,6 +48,7 @@ static RCore* opencore(const char *f) {
 			return NULL;
 		}
 		r_core_bin_load (c, NULL, baddr);
+		(void)r_core_bin_update_arch_bits (c);
 	}
 	// TODO: must enable io.va here if wanted .. r_config_set_i (c->config, "io.va", va);
 	if (f && anal_all) {
@@ -58,13 +62,69 @@ static RCore* opencore(const char *f) {
 	return c;
 }
 
+
+static bool virgin = true;
+static void readstr (char *s, int sz, const ut8 *buf, int len) {
+	int die = 0;
+	int last = R_MIN (len, sz);
+	strncpy (s, (char *)buf, last + die);
+	s[last] = 0;
+	while (*s && *s == '\n') {
+		s++;
+	}
+#if 1
+	char *nl = strchr (s, '\n');
+	if (nl) {
+		*nl = 0;
+	}
+#endif
+	virgin = false;
+}
+
 static int cb(RDiff *d, void *user, RDiffOp *op) {
 	int i; //, diffmode = (int)(size_t)user;
+	char s[256];
 	if (showcount) {
 		count++;
 		return 1;
 	}
 	switch (diffmode) {
+	case 'U': // 'U' in theory never handled here
+	case 'u':
+		if (op->a_len > 0) {
+			readstr (s, sizeof (s), op->a_buf, op->a_len);
+			if (*s) {
+				if (!quiet) printf (Color_RED);
+				if (r_mem_is_printable ((const ut8*)s, R_MIN (strlen (s), 5))) {
+					printf ("- %s\n", s);
+				} else {
+					printf ("-:");
+					int len = op->a_len; //R_MIN (op->a_len, strlen (op->a_buf));
+					for (i = 0; i < len; i++) {
+						printf ("%02x", op->a_buf[i]);
+					}
+					printf (" \"%s\"\n", op->a_buf);
+				}
+				if (!quiet) printf (Color_RESET);
+			}
+		}
+		if (op->b_len > 0) {
+			readstr (s, sizeof (s), op->b_buf, op->b_len);
+			if (*s) {
+				if (!quiet) printf (Color_GREEN);
+				if (r_mem_is_printable ((const ut8*)s, R_MIN (strlen (s), 5))) {
+					printf ("+ %s\n", s);
+				} else {
+					printf ("+:");
+					for (i = 0; i < op->b_len; i++) {
+						printf ("%02x", op->b_buf[i]);
+					}
+					printf (" \"%s\"\n", op->b_buf);
+				}
+				if (!quiet) printf (Color_RESET);
+			}
+		}
+		break;
 	case 'r':
 		if (disasm) {
 			eprintf ("r2cmds (-r) + disasm (-D) not yet implemented\n");
@@ -76,9 +136,10 @@ static int cb(RDiff *d, void *user, RDiffOp *op) {
 			}
 			printf (" @ 0x%08"PFMT64x"\n", op->b_off);
 		} else {
-			if (op->a_len > 0)
+			if (op->a_len > 0) {
 				printf ("r-%d @ 0x%08"PFMT64x"\n",
 					op->a_len, op->a_off + delta);
+			}
 			if (op->b_len > 0) {
 				printf ("r+%d @ 0x%08"PFMT64x"\n",
 					op->b_len, op->b_off + delta);
@@ -153,10 +214,11 @@ static int cb(RDiff *d, void *user, RDiffOp *op) {
 		}
 		return 1;
 	}
+	return 0;
 }
 
 static int show_help(int v) {
-	printf ("Usage: radiff2 [-abcCdjrspOxvV] [-g sym] [-t %%] [file] [file]\n");
+	printf ("Usage: radiff2 [-abcCdjrspOxuUvV] [-A[A]] [-g sym] [-t %%] [file] [file]\n");
 	if (v) {
 		printf (
 		"  -a [arch]  specify architecture plugin to use (x86, arm, ..)\n"
@@ -167,18 +229,23 @@ static int show_help(int v) {
 		"  -d         use delta diffing\n"
 		"  -D         show disasm instead of hexpairs\n"
 		"  -g [sym|off1,off2]   graph diff of given symbol, or between two offsets\n"
+		"  -i         diff imports of target files (see -u, -U and -z)\n"
 		"  -j         output in json format\n"
 		"  -n         print bare addresses only (diff.bare=1)\n"
 		"  -O         code diffing with opcode bytes only\n"
 		"  -p         use physical addressing (io.va=0)\n"
+		"  -q         quiet mode (disable colors, reduce output)\n"
 		"  -r         output in radare commands\n"
 		"  -s         compute text distance\n"
 		"  -ss        compute text distance (using levenstein algorithm)\n"
 		"  -S [name]  sort code diff (name, namelen, addr, size, type, dist) (only for -C or -g)\n"
 		"  -t [0-100] set threshold for code diff (default is 70%%)\n"
 		"  -x         show two column hexdump diffing\n"
+		"  -u         unified output (---+++)\n"
+		"  -U         unified output using system 'diff'\n"
 		"  -v         show version information\n"
-		"  -V         be verbose (current only for -s)\n");
+		"  -V         be verbose (current only for -s)\n"
+		"  -z         diff on extracted strings\n");
 	}
 	return 1;
 }
@@ -248,8 +315,9 @@ static void dump_cols (ut8 *a, int as, ut8 *b, int bs, int w) {
 		}
 		printf ("\n");
 	}
-	if (as != bs)
+	if (as != bs) {
 		printf ("...\n");
+	}
 }
 
 static void handle_sha256 (const ut8 *block, int len) {
@@ -294,10 +362,91 @@ static ut8 *slurp(RCore **c, const char *file, int *sz) {
 		} else {
 			eprintf ("slurp: File is too big\n");
 		}
-		r_io_close (io, d);
+		r_io_close (io, d->fd);
 		return data;
 	}
 	return (ut8*)r_file_slurp (file, sz);
+}
+
+static int import_cmp(const RBinImport* a, const RBinImport* b) {
+	return strcmp (a->name, b->name);
+}
+
+static ut8 *get_imports(RCore *c, int *len) {
+	RList *list = r_bin_get_imports (c->bin);
+	RListIter *iter;
+	RBinImport *str, *old = NULL;
+	ut8 *buf, *ptr;
+
+	r_list_sort (list, (RListComparator)import_cmp);
+
+	*len = 0;
+
+	r_list_foreach (list, iter, str) {
+		if (!old || (old && import_cmp (old, str) != 0)) {
+			*len += strlen (str->name) + 1;
+			old = str;
+		}
+	}
+	ptr = buf = malloc (*len + 1);
+
+	old = NULL;
+
+	r_list_foreach (list, iter, str) {
+		if (old && import_cmp (old, str) == 0) {
+			continue;
+		}
+		int namelen = strlen (str->name);
+		memcpy (ptr, str->name, namelen);
+		ptr += namelen;
+		*ptr++ = '\n';
+		old = str;
+	}
+	*ptr = 0;
+
+	*len = strlen ((const char *)buf);
+	return buf;
+}
+
+static int bs_cmp(const RBinString* a, const RBinString* b) {
+	int diff = a->length - b->length;
+	return diff == 0 ? strncmp (a->string, b->string, a->length) : diff;
+}
+
+static ut8 *get_strings(RCore *c, int *len) {
+	RList *list = r_bin_get_strings (c->bin);
+	RListIter *iter;
+	RBinString *str, *old = NULL;
+	ut8 *buf, *ptr;
+
+	r_list_sort (list, (RListComparator)bs_cmp);
+
+	*len = 0;
+
+	r_list_foreach (list, iter, str) {
+		if (!old || (old && bs_cmp (old, str) != 0)) {
+			*len += str->length + 1;
+			old = str;
+		}
+	}
+	
+	ptr = buf = malloc (*len + 1);
+
+	old = NULL;
+
+	r_list_foreach (list, iter, str) {
+		if (old && bs_cmp (old, str) == 0) {
+			continue;
+		}
+		memcpy (ptr, str->string, str->length);
+		ptr += str->length;
+		*ptr++ = '\n';
+		old = str;
+	}
+	*ptr = 0;
+
+	*len = strlen ((const char *)buf);
+	return buf;
 }
 
 int main(int argc, char **argv) {
@@ -312,7 +461,7 @@ int main(int argc, char **argv) {
 	int threshold = -1;
 	double sim;
 
-	while ((o = getopt (argc, argv, "Aa:b:CDnpg:OjrhcdsS:Vvxt:")) != -1) {
+	while ((o = getopt (argc, argv, "Aa:b:CDnpg:OijrhcdsS:uUvVxt:zq")) != -1) {
 		switch (o) {
 		case 'a':
 			arch = optarg;
@@ -339,6 +488,9 @@ int main(int argc, char **argv) {
 		case 'C':
 			mode = MODE_CODE;
 			break;
+		case 'i':
+			mode = MODE_DIFF_IMPORTS;
+			break;
 		case 'n':
 			showbare = true;
 			break;
@@ -353,7 +505,13 @@ int main(int argc, char **argv) {
 			delta = 1;
 			break;
 		case 'D':
-			disasm = true;
+			if (disasm) {
+				pdc = true;
+				disasm = false;
+				mode = MODE_CODE;
+			} else {
+				disasm = true;
+			}
 			break;
 		case 'h':
 			return show_help (1);
@@ -370,14 +528,26 @@ int main(int argc, char **argv) {
 		case 'x':
 			mode = MODE_COLS;
 			break;
+		case 'u':
+			diffmode = 'u';
+			break;
+		case 'U':
+			diffmode = 'U';
+			break;
 		case 'v':
-			printf ("radiff2 v"R2_VERSION"\n");
+			return blob_version ("radiff2");
 			return 0;
+		case 'q':
+			quiet = true;
+			break;
 		case 'V':
 			verbose = true;
 			break;
 		case 'j':
 			diffmode = 'j';
+			break;
+		case 'z':
+			mode = MODE_DIFF_STRS;
 			break;
 		default:
 			return show_help (0);
@@ -387,21 +557,14 @@ int main(int argc, char **argv) {
 	if (argc < 3 || optind + 2 > argc) {
 		return show_help (0);
 	}
-	if (optind < argc) {
-		file = argv[optind];
-	} else {
-		file = NULL;
-	}
-
-	if (optind + 1 < argc) {
-		file2 = argv[optind + 1];
-	} else {
-		file2 = NULL;
-	}
+	file = (optind < argc)? argv[optind]: NULL;
+	file2 = (optind + 1 < argc)? argv[optind + 1] : NULL;
 
 	switch (mode) {
 	case MODE_GRAPH:
 	case MODE_CODE:
+	case MODE_DIFF_STRS:
+	case MODE_DIFF_IMPORTS:
 		c = opencore (file);
 		if (!c) {
 			eprintf ("Cannot open '%s'\n", r_str_get (file));
@@ -427,13 +590,29 @@ int main(int argc, char **argv) {
 		r_config_set_i (c2->config, "diff.bare", showbare);
 		r_anal_diff_setup_i (c->anal, diffops, threshold, threshold);
 		r_anal_diff_setup_i (c2->anal, diffops, threshold, threshold);
-		if (mode == MODE_GRAPH) {
+		if (pdc) {
+			if (!addr) {
+				addr = "entry0";
+				addr = "main";
+			}
+			/* should be in mode not in bool pdc */
+			r_config_set (c->config, "scr.color", "false");
+			r_config_set (c2->config, "scr.color", "false");
+
+			ut64 addra = r_num_math (c->num, addr);
+			bufa = (ut8*)r_core_cmd_strf (c, "af;pdc @ 0x%08"PFMT64x, addra);
+			sza = strlen ((const char *)bufa);
+
+			ut64 addrb = r_num_math (c2->num, addr);
+			bufb = (ut8*)r_core_cmd_strf (c2, "af;pdc @ 0x%08"PFMT64x, addrb);
+			szb = strlen ((const char *)bufb);
+			mode = MODE_DIFF;
+		} else if (mode == MODE_GRAPH) {
 			char *words = strdup (addr ? addr : "0");
 			char *second = strstr (words, ",");
 			if (second) {
-				ut64 off;
 				*second++ = 0;
-				off = r_num_math (c->num, words);
+				ut64 off = r_num_math (c->num, words);
 				// define the same function at each offset
 				r_core_anal_fcn (c, off, UT64_MAX, R_ANAL_REF_TYPE_NULL, 0);
 				r_core_anal_fcn (c2, r_num_math (c2->num, second),
@@ -450,28 +629,42 @@ int main(int argc, char **argv) {
 					R_CORE_ANAL_GRAPHBODY | R_CORE_ANAL_GRAPHDIFF);
 			}
 			free (words);
-		} else {
+		} else if (mode == MODE_CODE) {
 			r_core_gdiff (c, c2);
 			r_core_diff_show (c, c2);
+		} else if (mode == MODE_DIFF_IMPORTS) {
+			bufa = get_imports (c, &sza);
+			bufb = get_imports (c2, &szb);
+		} else if (mode == MODE_DIFF_STRS) {
+			bufa = get_strings (c, &sza);
+			bufb = get_strings (c2, &szb);
 		}
-		r_cons_flush ();
+		if (mode == MODE_CODE || mode == MODE_GRAPH) {
+			r_cons_flush ();
+		}
 		r_core_free (c);
 		r_core_free (c2);
-		return 0;
-	}
-	bufa = slurp (&c, file, &sza);
-	if (!bufa) {
-		eprintf ("radiff2: Cannot open %s\n", r_str_get (file));
-		return 1;
-	}
-	bufb = slurp (&c, file2, &szb);
-	if (!bufb) {
-		eprintf ("radiff2: Cannot open: %s\n", r_str_get (file2));
-		free (bufa);
-		return 1;
-	}
-	if (sza != szb) {
-		eprintf ("File size differs %d vs %d\n", sza, szb);
+
+		if (mode == MODE_CODE || mode == MODE_GRAPH) {
+			return 0;
+		}
+		break;
+	default:
+		bufa = slurp (&c, file, &sza);
+		if (!bufa) {
+			eprintf ("radiff2: Cannot open %s\n", r_str_get (file));
+			return 1;
+		}
+		bufb = slurp (&c, file2, &szb);
+		if (!bufb) {
+			eprintf ("radiff2: Cannot open: %s\n", r_str_get (file2));
+			free (bufa);
+			return 1;
+		}
+		if (sza != szb) {
+			eprintf ("File size differs %d vs %d\n", sza, szb);
+		}
+		break;
 	}
 
 	switch (mode) {
@@ -479,7 +672,9 @@ int main(int argc, char **argv) {
 		dump_cols (bufa, sza, bufb, szb, (r_cons_get_size (NULL) > 112) ? 16 : 8);
 		break;
 	case MODE_DIFF:
-		d = r_diff_new (0LL, 0LL);
+	case MODE_DIFF_STRS:
+	case MODE_DIFF_IMPORTS:
+		d = r_diff_new ();
 		r_diff_set_delta (d, delta);
 		if (diffmode == 'j') {
 			printf("{\"files\":[{\"filename\":\"%s\", \"size\":%d, \"sha256\":\"", file, sza);
@@ -489,8 +684,13 @@ int main(int argc, char **argv) {
 			printf("\"}],\n");
 			printf("\"changes\":[");
 		}
-		r_diff_set_callback (d, &cb, 0);//(void *)(size_t)diffmode);
-		r_diff_buffers (d, bufa, sza, bufb, szb);
+		virgin = true;
+		if (diffmode == 'U') {
+			r_diff_buffers_unified (d, bufa, sza, bufb, szb);
+		} else {
+			r_diff_set_callback (d, &cb, 0); // (void *)(size_t)diffmode);
+			r_diff_buffers (d, bufa, sza, bufb, szb);
+		}
 		if (diffmode == 'j') {
 			printf ("]\n");
 		}

@@ -23,9 +23,9 @@ CS_PATCHES=0
 else
 CS_TAR=
 CS_URL=$(GIT_PREFIX)github.com/aquynh/capstone.git
-CS_UPD=20161213
+CS_UPD=20170313
 CS_BRA=next
-CS_TIP=0237e4ca0cf3687e60e3f7626d144ff07d1aecf5
+CS_TIP=f7a3cc25965e4d7d4f3488394b24f1d4650de905
 # REVERT THIS COMMIT BECAUSE ITS WRONG
 CS_REV=
 CS_PATCHES=1
@@ -45,6 +45,7 @@ MODS+=gdb
 MODS+=qnx
 SDB_URL=git://github.com/radare/sdb
 #SDB_URL=/Users/pancake/prg/sdb
+SPP_URL=git://github.com/radare/spp
 PWD=$(shell pwd)
 SDB_CONFIG=${PWD}/sdb-config.mk
 
@@ -280,3 +281,16 @@ www-sync-t sync-www-t:
 
 sync-www www-sync: www-sync-m www-sync-p www-sync-t
 	@echo webui sync done
+
+spp-sync sync-spp:
+	-git rm -r spp
+	rm -rf spp
+	git clone --depth 1 ${SPP_URL} spp
+	rm -rf spp/.git*
+	rm -rf spp/t
+	git add spp
+
+spp: spp-sync
+	CFLAGS=-fPIC $(MAKE) -C spp
+
+.PHONY: spp

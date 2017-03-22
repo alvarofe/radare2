@@ -13,16 +13,87 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#if __UNIX__ || defined(__CYGWIN__)
-#include <netinet/tcp.h>
+#if EMSCRIPTEN
+#define NETWORK_DISABLED 1
+#else
+#define NETWORK_DISABLED 0
 #endif
 
 R_LIB_VERSION(r_socket);
 
-#if EMSCRIPTEN
+
+#if NETWORK_DISABLED
 /* no network */
-R_API RSocket *r_socket_new (int is_ssl) { return NULL; }
-#endif
+R_API RSocket *r_socket_new (int is_ssl) {
+	return NULL;
+}
+R_API bool r_socket_is_connected (RSocket *s) {
+	return false;
+}
+static int r_socket_unix_connect(RSocket *s, const char *file) {
+	return -1;
+}
+R_API int r_socket_unix_listen (RSocket *s, const char *file) {
+	return -1;
+}
+R_API bool r_socket_connect (RSocket *s, const char *host, const char *port, int proto, unsigned int timeout) {
+	return false;
+}
+R_API int r_socket_close_fd (RSocket *s) {
+	return -1;
+}
+R_API int r_socket_close (RSocket *s) {
+	return -1;
+}
+R_API int r_socket_free (RSocket *s) {
+	return -1;
+}
+R_API int r_socket_port_by_name(const char *name) {
+	return -1;
+}
+R_API bool r_socket_listen (RSocket *s, const char *port, const char *certfile) {
+	return false;
+}
+R_API RSocket *r_socket_accept(RSocket *s) {
+	return NULL;
+}
+R_API int r_socket_block_time (RSocket *s, int block, int sec) {
+	return -1;
+}
+R_API int r_socket_flush(RSocket *s) {
+	return -1;
+}
+R_API int r_socket_ready(RSocket *s, int secs, int usecs) {
+	return -1;
+}
+R_API char *r_socket_to_string(RSocket *s) {
+	return NULL;
+}
+R_API int r_socket_write(RSocket *s, void *buf, int len) {
+	return -1;
+}
+R_API int r_socket_puts(RSocket *s, char *buf) {
+	return -1;
+}
+R_API void r_socket_printf(RSocket *s, const char *fmt, ...) {
+	/* nothing here */
+}
+R_API int r_socket_read(RSocket *s, unsigned char *buf, int len) {
+	return -1;
+}
+R_API int r_socket_read_block(RSocket *s, unsigned char *buf, int len) {
+	return -1;
+}
+R_API int r_socket_gets(RSocket *s, char *buf,	int size) {
+	return -1;
+}
+R_API RSocket *r_socket_new_from_fd (int fd) {
+	return NULL;
+}
+R_API ut8* r_socket_slurp(RSocket *s, int *len) {
+	return NULL;
+}
+#else
 
 #if 0
 winsock api notes
@@ -33,7 +104,7 @@ WSACleanup: closes all network connections
 #define BUFFER_SIZE 4096
 
 R_API bool r_socket_is_connected (RSocket *s) {
-#if __WINDOWS__ && !defined(__CYGWIN__) && !defined(__MINGW64__)
+#if __WINDOWS__ && !defined(__CYGWIN__) //&& !defined(__MINGW64__)
 	char buf[2];
 	r_socket_block_time (s, 0, 0);
 	ssize_t ret = recv (s->fd, (char*)&buf, 1, MSG_PEEK);
@@ -116,18 +187,20 @@ R_API RSocket *r_socket_new (int is_ssl) {
 		s->sfd = NULL;
 		s->ctx = NULL;
 		s->bio = NULL;
+#if OPENSSL_VERSION_NUMBER < 0x1010000fL
 		if (!SSL_library_init ()) {
 			r_socket_free (s);
 			return NULL;
 		}
 		SSL_load_error_strings ();
+#endif
 	}
 #endif
 	return s;
 }
 
 R_API bool r_socket_connect (RSocket *s, const char *host, const char *port, int proto, unsigned int timeout) {
-#if __WINDOWS__ && !defined(__CYGWIN__) && !defined(__MINGW64__)
+#if __WINDOWS__ && !defined(__CYGWIN__) //&& !defined(__MINGW64__)
 	struct sockaddr_in sa;
 	struct hostent *he;
 	WSADATA wsadata;
@@ -289,7 +362,7 @@ R_API int r_socket_close (RSocket *s) {
 #if __UNIX__ || defined(__CYGWIN__)
 		shutdown (s->fd, SHUT_RDWR);
 #endif
-#if __WINDOWS__ && !defined(__CYGWIN__) && !defined(__MINGW64__)
+#if __WINDOWS__ && !defined(__CYGWIN__) //&& !defined(__MINGW64__)
 		// https://msdn.microsoft.com/en-us/library/windows/desktop/ms740481(v=vs.85).aspx
 		shutdown (s->fd, SD_SEND);
 		do {
@@ -341,7 +414,7 @@ R_API bool r_socket_listen (RSocket *s, const char *port, const char *certfile) 
 	if (r_sandbox_enable (0)) {
 		return false;
 	}
-#if __WINDOWS__ && !defined(__CYGWIN__) && !defined(__MINGW64__)
+#if __WINDOWS__ && !defined(__CYGWIN__) //&& !defined(__MINGW64__)
 	WSADATA wsadata;
 	if (WSAStartup (MAKEWORD (1, 1), &wsadata) == SOCKET_ERROR) {
 		eprintf ("Error creating socket.");
@@ -463,7 +536,7 @@ R_API int r_socket_block_time (RSocket *s, int block, int sec) {
 			(flags | O_NONBLOCK));
 	if (ret < 0)
 		return false;
-#elif __WINDOWS__ && !defined(__CYGWIN__) && !defined(__MINGW64__)
+#elif __WINDOWS__ && !defined(__CYGWIN__) //&& !defined(__MINGW64__)
 	// HACK: nonblocking io on w32 behaves strange
 	return true;
 	ioctlsocket (s->fd, FIONBIO, (u_long FAR*)&block);
@@ -499,13 +572,14 @@ R_API int r_socket_ready(RSocket *s, int secs, int usecs) {
 	fds[0].events = POLLIN | POLLPRI;
 	fds[0].revents = POLLNVAL | POLLHUP | POLLERR;
 	return poll ((struct pollfd *)&fds, 1, msecs);
-#elif __WINDOWS__ && !defined(__CYGWIN__) && !defined(__MINGW64__)
+#elif __WINDOWS__ && !defined(__CYGWIN__) //&& !defined(__MINGW64__)
 	return 1;
 #if XXX_THIS_IS_NOT_WORKING_WELL
 	fd_set rfds;
 	struct timeval tv;
-	if (s->fd==-1)
+	if (s->fd == -1) {
 		return -1;
+	}
 	FD_ZERO (&rfds);
 	FD_SET (s->fd, &rfds);
 	tv.tv_sec = secs;
@@ -520,7 +594,7 @@ R_API int r_socket_ready(RSocket *s, int secs, int usecs) {
 }
 
 R_API char *r_socket_to_string(RSocket *s) {
-#if __WINDOWS__ && !defined(__CYGWIN__) && !defined(__MINGW64__)
+#if __WINDOWS__ && !defined(__CYGWIN__) //&& !defined(__MINGW64__)
 	char *str = malloc (32);
 	snprintf (str, 31, "fd%d", s->fd);
 	return str;
@@ -550,7 +624,9 @@ R_API int r_socket_write(RSocket *s, void *buf, int len) {
 #endif
 	for (;;) {
 		int b = 1500; //65536; // Use MTU 1500?
-		if (b>len) b = len;
+		if (b > len) {
+			b = len;
+		}
 #if HAVE_LIB_SSL
 		if (s->is_ssl) {
 			if (s->bio)
@@ -601,7 +677,7 @@ R_API int r_socket_read(RSocket *s, unsigned char *buf, int len) {
 		return SSL_read (s->sfd, buf, len);
 	}
 #endif
-#if __WINDOWS__ && !defined(__CYGWIN__) && !defined(__MINGW64__)
+#if __WINDOWS__ && !defined(__CYGWIN__) //&& !defined(__MINGW64__)
 rep:
 	{
 	int ret = recv (s->fd, (void *)buf, len, 0);
@@ -695,3 +771,5 @@ R_API ut8* r_socket_slurp(RSocket *s, int *len) {
 	}
 	return buf;
 }
+
+#endif // EMSCRIPTEN

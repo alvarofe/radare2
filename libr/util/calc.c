@@ -79,29 +79,31 @@ static RNumCalcValue term(RNum *num, RNumCalc *nc, int get) {
 	for (;;) {
 		if (nc->curr_tok == RNCMUL) {
 			left = Nmul (left, prim (num, nc, 1));
-		} else
-		if (nc->curr_tok == RNCMOD) {
+		} else if (nc->curr_tok == RNCMOD) {
 			RNumCalcValue d = prim (num, nc, 1);
 			if (!d.d) {
 				//error (num, nc, "divide by 0");
 				return d;
 			}
 			left = Nmod (left, d);
-		} else
-		if (nc->curr_tok == RNCDIV) {
+		} else if (nc->curr_tok == RNCDIV) {
 			RNumCalcValue d = prim (num, nc, 1);
 			if (num != NULL && (!d.d || !d.n)) {
 				num->dbz = 1;
 				return d;
 			}
 			left = Ndiv (left, d);
-		} else return left;
+		} else {
+			return left;
+		}
 	}
 }
 
 static RNumCalcValue prim(RNum *num, RNumCalc *nc, int get) {
 	RNumCalcValue v = {0};
-	if (get) get_token (num, nc);
+	if (get) {
+		get_token (num, nc);
+	}
 	switch (nc->curr_tok) {
 	case RNCNUMBER:
 		v = nc->number_value;
@@ -116,22 +118,32 @@ static RNumCalcValue prim(RNum *num, RNumCalc *nc, int get) {
 		if (nc->curr_tok  == RNCASSIGN) {
 			v = expr (num, nc, 1);
 		}
-		if (nc->curr_tok == RNCINC) Naddi (v, 1);
-		if (nc->curr_tok == RNCDEC) Nsubi (v, 1);
+		if (nc->curr_tok == RNCINC) {
+			Naddi (v, 1);
+		}
+		if (nc->curr_tok == RNCDEC) {
+			Nsubi (v, 1);
+		}
 		return v;
 	case RNCNEG:
 		v = nc->number_value;
 		get_token (num, nc);
 		return Nneg (nc->number_value); //prim (num, nc, 1), 1);
-	case RNCINC: return Naddi (prim (num, nc, 1), 1);
-	case RNCDEC: return Naddi (prim (num, nc, 1), -1);
-	case RNCORR: return Norr (v, prim (num, nc, 1));
-	case RNCMINUS: return Nsub (v, prim (num, nc, 1));
+	case RNCINC:
+		return Naddi (prim (num, nc, 1), 1);
+	case RNCDEC:
+		return Naddi (prim (num, nc, 1), -1);
+	case RNCORR:
+		return Norr (v, prim (num, nc, 1));
+	case RNCMINUS:
+		return Nsub (v, prim (num, nc, 1));
 	case RNCLEFTP:
 		v = expr (num, nc, 1);
 		if (nc->curr_tok == RNCRIGHTP) {
 			get_token (num, nc);
-		} else error (num, nc, " ')' expected");
+		} else {
+			error (num, nc, " ')' expected");
+		}
 	case RNCEND:
 	case RNCXOR:
 	case RNCAND:
@@ -154,8 +166,10 @@ static void cin_putback (RNum *num, RNumCalc *nc, char c) {
 	nc->oc = c;
 }
 
-R_API const char *r_num_calc_index (RNum *num, const char *p) {
-	if (!num) return NULL;
+R_API const char *r_num_calc_index(RNum *num, const char *p) {
+	if (!num) {
+		return NULL;
+	}
 	if (p) {
 		num->nc.calc_buf = p;
 		num->nc.calc_len = strlen (p);
@@ -169,12 +183,15 @@ static int cin_get(RNum *num, RNumCalc *nc, char *c) {
 		*c = nc->oc;
 		nc->oc = 0;
 	} else {
-		if (!nc->calc_buf)
+		if (!nc->calc_buf) {
 			return 0;
-		//if (nc->calc_i>nc->calc_len) return 0;
+		}
 		*c = nc->calc_buf[nc->calc_i];
-		if (*c) nc->calc_i++;
-		else return 0;
+		if (*c) {
+			nc->calc_i++;
+		} else {
+			return 0;
+		}
 	}
 	return 1;
 }
@@ -196,30 +213,15 @@ static int cin_get_num(RNum *num, RNumCalc *nc, RNumCalcValue *n) {
 	}
 	str[i] = 0;
 	*n = Nset (r_num_get (num, str));
-	if (*str>='0' && *str<='9' && strchr (str, '.')) {
-		if (sscanf (str, "%lf", &d)<1)
+	if (IS_DIGIT (*str) && strchr (str, '.')) {
+		if (sscanf (str, "%lf", &d) < 1) {
 			return 0;
-		*n = Nsetf (d);
+		}
+		if (n->n < d) {
+			*n = Nsetf (d);
+		}
+		n->d = d;
 	}
-#if 0
-// XXX: use r_num_get here
-	if (str[0]=='0' && str[1]=='x') {
-		ut64 x = 0;
-		if (sscanf (str+2, "%llx", &x)<1)
-			return 0;
-		*n = Nset (x);
-	} else
-	if (strchr (str, '.')) {
-		if (sscanf (str, "%lf", &d)<1)
-			return 0;
-		*n = Nsetf (d);
-	} else {
-		ut64 u;
-		if (sscanf (str, "%"PFMT64d, &u)<1)
-			return 0;
-		*n = Nset (u);
-	}
-#endif
 	return 1;
 }
 
@@ -235,20 +237,23 @@ static RNumCalcToken get_token(RNum *num, RNumCalc *nc) {
 	case '\n':
 		return nc->curr_tok = RNCEND;
 	case '+':    // added for ++name and name++
-		if (cin_get (num, nc, &c) && c == '+')
+		if (cin_get (num, nc, &c) && c == '+') {
 			return nc->curr_tok = RNCINC;
+		}
 		cin_putback (num, nc, c);
 		return nc->curr_tok = (RNumCalcToken) ch;
 	// negate hack
 	case '~':
-		if (cin_get (num, nc, &c) && c == '-')
+		if (cin_get (num, nc, &c) && c == '-') {
 			return nc->curr_tok = RNCNEG;
+		}
 		cin_putback (num, nc, c);
 		return nc->curr_tok = (RNumCalcToken) ch;
 	// negative number
 	case '-':
-		if (cin_get (num, nc, &c) && c == '-')
+		if (cin_get (num, nc, &c) && c == '-') {
 			return nc->curr_tok = RNCDEC;
+		}
 		cin_putback (num, nc, c);
 		return nc->curr_tok = (RNumCalcToken) ch;
 	case '^':
@@ -297,7 +302,7 @@ static RNumCalcToken get_token(RNum *num, RNumCalc *nc) {
 				stringValueAppend(ch);
 			} else {
 				while (cin_get (num, nc, &ch) && isvalidchar ((unsigned char)ch)) {
-					if (i>=R_NUMCALC_STRSZ) {
+					if (i >= R_NUMCALC_STRSZ) {
 						error (num, nc, "string too long");
 						return 0;
 					}
@@ -315,7 +320,7 @@ static RNumCalcToken get_token(RNum *num, RNumCalc *nc) {
 
 static void load_token(RNum *num, RNumCalc *nc, const char *s) {
 	nc->calc_i = 0;
-	nc->calc_len = 0;
+	nc->calc_len = strlen (s);
 	nc->calc_buf = s;
 	nc->calc_err = NULL;
 }
@@ -323,15 +328,15 @@ static void load_token(RNum *num, RNumCalc *nc, const char *s) {
 R_API ut64 r_num_calc(RNum *num, const char *str, const char **err) {
 	RNumCalcValue n;
 	RNumCalc *nc, nc_local;
-	if (!str || !*str)
+	if (!str || !*str) {
 		return 0LL;
+	}
 	if (num) {
 		nc = &num->nc;
 		num->dbz = 0;
 	} else {
 		nc = &nc_local;
 	}
-
 	/* init */
 	nc->curr_tok = RNCPRINT;
 	nc->number_value.d = 0.0;
@@ -346,15 +351,9 @@ R_API ut64 r_num_calc(RNum *num, const char *str, const char **err) {
 	load_token (num, nc, str);
 	get_token (num, nc);
 	n = expr (num, nc, 0);
-	if (err) *err = nc->calc_err;
-	//if (nc->curr_tok == RNCEND) return 0LL; // XXX: Error
-	//if (nc->curr_tok == RNCPRINT) //return 0LL; // XXX: the fuck
-	//	n = expr (num, nc, 0);
-#if 0
-	if (n.d != ((double)(ut64)n.d)) {
-		if (num) num->fvalue = n.d;
-	} else if (num) num->fvalue = (double)n.n;
-#endif
+	if (err) {
+		*err = nc->calc_err;
+	}
 	if (num) {
 		num->fvalue = n.d;
 	}
@@ -367,12 +366,18 @@ int main(int argc, char* argv[]) {
 	RNumCalc nc;
 	while (!feof (stdin)) {
 		get_token (nc);
-		if (nc.curr_tok == RNCEND) break;
-		if (nc.curr_tok == RNCPRINT) continue;
+		if (nc.curr_tok == RNCEND) {
+			break;
+		}
+		if (nc.curr_tok == RNCPRINT) {
+			continue;
+		}
 		n = expr (num, nc, 0);
-		if (n.d == ((double)(int)n.d))
+		if (n.d == ((double)(int)n.d)) {
 			printf ("%llx\n", n.n);
-		else printf ("%lf\n", n.d);
+		} else {
+			printf ("%lf\n", n.d);
+		}
 	}
 	return nc->errors;
 }

@@ -36,10 +36,10 @@ static int w32__close(RIODesc *fd) {
 // TODO: handle filesize and so on
 static ut64 w32__lseek(RIO *io, RIODesc *fd, ut64 offset, int whence) {
 	SetFilePointer (RIOW32_HANDLE (fd), offset, 0, !whence?FILE_BEGIN:whence==1?FILE_CURRENT:FILE_END);
-        return (!whence)?offset:whence==1?io->off+offset:UT64_MAX;
+	return (!whence)?offset:whence==1?io->off+offset:UT64_MAX;
 }
 
-static int w32__plugin_open(RIO *io, const char *pathname, ut8 many) {
+static bool w32__plugin_open(RIO *io, const char *pathname, bool many) {
 	return (!strncmp (pathname, "w32://", 6));
 }
 
@@ -56,7 +56,7 @@ static RIODesc *w32__open(RIO *io, const char *pathname, int rw, int mode) {
 			FILE_SHARE_READ | rw? FILE_SHARE_WRITE:0,
 			NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 		if (w32->hnd != INVALID_HANDLE_VALUE)
-			return r_io_desc_new (&r_io_plugin_w32, getw32fd (w32),
+			return r_io_desc_new (io, &r_io_plugin_w32,
 				pathname, rw, mode, w32);
 		free (w32);
 	}
@@ -65,12 +65,12 @@ static RIODesc *w32__open(RIO *io, const char *pathname, int rw, int mode) {
 
 RIOPlugin r_io_plugin_w32 = {
 	.name = "w32",
-        .desc = "w32 API io",
+	.desc = "w32 API io",
 	.license = "LGPL3",
-        .open = w32__open,
-        .close = w32__close,
+	.open = w32__open,
+	.close = w32__close,
 	.read = w32__read,
-        .check = w32__plugin_open,
+	.check = w32__plugin_open,
 	.lseek = w32__lseek,
 	.system = NULL, // w32__system,
 	.write = w32__write,

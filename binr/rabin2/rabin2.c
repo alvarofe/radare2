@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2016 - nibble, pancake */
+/* radare - LGPL - Copyright 2009-2017 - nibble, pancake */
 
 #include <getopt.c>
 #include <r_core.h>
@@ -25,8 +25,8 @@ static ut64 at = 0LL;
 static RLib *l;
 
 static int rabin_show_help(int v) {
-	printf ("Usage: rabin2 [-AcdeEghHiIjlLMqrRsSvVxzZ] [-@ addr] [-a arch] [-b bits]\n"
-		"              [-B addr] [-C F:C:D] [-f str] [-m addr] [-n str] [-N m:M]\n"
+	printf ("Usage: rabin2 [-AcdeEghHiIjlLMqrRsSvVxzZ] [-@ at] [-a arch] [-b bits] [-B addr]\n"
+		"              [-C F:C:D] [-f str] [-m addr] [-n str] [-N m:M] [-P[-P] pdb]\n"
 		"              [-o str] [-O str] [-k query] [-D lang symname] | file\n");
 	if (v) {
 		printf (
@@ -53,7 +53,7 @@ static int rabin_show_help(int v) {
 		" -k [sdb-query]  run sdb query. for example: '*'\n"
 		" -K [algo]       calculate checksums (md5, sha1, ..)\n"
 		" -l              linked libraries\n"
-		" -L              list supported bin plugins\n"
+		" -L [plugin]     list supported bin plugins or plugin details\n"
 		" -m [addr]       show source line at addr\n"
 		" -M              main (show address of main symbol)\n"
 		" -n [str]        show section, symbol or import named str\n"
@@ -138,11 +138,9 @@ static bool isBinopHelp(const char *op) {
 	return false;
 }
 
-static bool extract_binobj(const RBinFile *bf, const RBinXtrData *data, int idx) {
+static bool extract_binobj(const RBinFile *bf, RBinXtrData *data, int idx) {
 	ut64 bin_size = data ? data->size : 0;
 	ut8 *bytes;
-	ut8 *bytes_encoded;
-	//ut64 sz = bf ? r_buf_size (bf->buf) : 0;
 	char *arch = "unknown";
 	int bits = 0;
 	char *libname = NULL;
@@ -163,24 +161,18 @@ static bool extract_binobj(const RBinFile *bf, const RBinXtrData *data, int idx)
 		eprintf ("This is not a fat bin\n");
 		return false;
 	}
-	bytes_encoded = (ut8 *) sdb_get (data->sdb, sdb_fmt (0, "%d", data->offset), 0);
-	bytes = sdb_decode ((const char *)bytes_encoded, NULL);
-	free (bytes_encoded);
-
+	bytes = data->buffer;
 	if (!bytes) {
 		eprintf ("error: BinFile buffer is empty\n");
 		return false;
 	}
-
 	if (!arch) {
 		arch = "unknown";
 	}
 	path = strdup (filename);
-
 	if (!path) {
 		return false;
 	}
-
 	// XXX: Wrong for w32 (/)
 	ptr = strrchr (path, DIRSEP);
 	if (ptr) {
@@ -188,9 +180,7 @@ static bool extract_binobj(const RBinFile *bf, const RBinXtrData *data, int idx)
 	} else {
 		ptr = path;
 	}
-
 	outpath_sz = strlen (path) + 20;
-
 	if (outpath_sz > 0) {
 		outpath = malloc (outpath_sz);
 	}
@@ -220,7 +210,6 @@ static bool extract_binobj(const RBinFile *bf, const RBinXtrData *data, int idx)
 		}
 	}
 
-
 	if (!outfile || !r_file_dump (outfile, bytes, bin_size, 0)) {
 		eprintf ("Error extracting %s\n", outfile);
 		res = false;
@@ -232,8 +221,7 @@ static bool extract_binobj(const RBinFile *bf, const RBinXtrData *data, int idx)
 	free (outfile);
 	free (outpath);
 	free (path);
-	free (bytes);
-
+	R_FREE (data->buffer);
 	return res;
 }
 
@@ -338,7 +326,8 @@ static int rabin_dump_sections(char *scnname) {
 				free (ret);
 				return false;
 			}
-			if (output) {
+			//it does mean the user specified an output file
+			if (strcmp (output, file)) {
 				r_file_dump (output, buf, section->size, 0);
 			} else {
 				r_hex_bin2str (buf, section->size, ret);
@@ -519,12 +508,30 @@ static char *demangleAs(int type) {
 	case R_BIN_NM_JAVA: res = r_bin_demangle_java (file); break;
 	case R_BIN_NM_OBJC: res = r_bin_demangle_objc (NULL, file); break;
 	case R_BIN_NM_SWIFT: res = r_bin_demangle_swift (file, 0); break; // XX: use
-	case R_BIN_NM_MSVC: res = r_bin_demangle_msvc(file); break;
+	case R_BIN_NM_MSVC: res = r_bin_demangle_msvc (file); break;
+	case R_BIN_NM_RUST: res = r_bin_demangle_rust (NULL, file, 0); break;
 	default:
 		eprintf ("Unsupported demangler\n");
 		break;
 	}
 	return res;
+}
+
+static int rabin_list_plugins(const char* plugin_name) {
+	int json = 0;
+
+	if (rad == R_CORE_BIN_JSON) {
+		json = 'j';
+	} else if (rad) {
+		json = 'q';
+	}
+
+	bin->cb_printf = (PrintfCallback)printf;
+
+	if (plugin_name) {
+		return r_bin_list_plugin (bin, plugin_name, json);
+	}
+	return r_bin_list (bin, json);
 }
 
 int main(int argc, char **argv) {
@@ -541,7 +548,7 @@ int main(int argc, char **argv) {
 	int xtr_idx = 0; // load all files if extraction is necessary.
 	int rawstr = 0;
 	int fd = -1;
-	RCore core;
+	RCore core = {0};
 
 	r_core_init (&core);
 	bin = core.bin;
@@ -659,7 +666,9 @@ int main(int argc, char **argv) {
 			break;
 		case 'Z': set_action (R_BIN_REQ_SIZE); break;
 		case 'I': set_action (R_BIN_REQ_INFO); break;
-		case 'H': set_action (R_BIN_REQ_FIELDS); break;
+		case 'H':
+			set_action (R_BIN_REQ_FIELDS);
+			break;
 		case 'd': set_action (R_BIN_REQ_DWARF); break;
 		case 'P':
 			if (is_active (R_BIN_REQ_PDB)) {
@@ -698,7 +707,8 @@ int main(int argc, char **argv) {
 					"  Resize Section: r/.data/1024\n"
 					"  Remove RPATH: R\n"
 					"  Add Library: a/l/libfoo.dylib\n"
-					"  Change Permissions: p/.data/rwx\n");
+					"  Change Permissions: p/.data/rwx\n"
+					"  Show LDID entitlements: C\n");
 				r_core_fini (&core);
 				return 0;
 			}
@@ -713,13 +723,7 @@ int main(int argc, char **argv) {
 		case 'r': rad = true; break;
 		case 'v': return blob_version ("rabin2");
 		case 'L':
-			bin->cb_printf = (PrintfCallback)printf;
-			if (rad) {
-				r_bin_list (bin, 'q');
-			} else {
-				r_bin_list (bin, rad == R_CORE_BIN_JSON);
-			}
-			return 1;
+			set_action (R_BIN_REQ_LISTPLUGINS);
 		case 'G':
 			laddr = r_num_math (NULL, optarg);
 			if (laddr == UT64_MAX) {
@@ -747,6 +751,15 @@ int main(int argc, char **argv) {
 			  return rabin_show_help (1);
 		default: action |= R_BIN_REQ_HELP;
 		}
+	}
+
+	if (is_active (R_BIN_REQ_LISTPLUGINS)) {
+		const char* plugin_name = NULL;
+		if (optind < argc) {
+			plugin_name = argv[optind];
+		}
+		rabin_list_plugins (plugin_name);
+		return 0;
 	}
 
 	if (do_demangle) {
@@ -917,7 +930,6 @@ int main(int argc, char **argv) {
 			return 1;
 		}
 	}
-
 	bin->minstrlen = r_config_get_i (core.config, "bin.minstr");
 	bin->maxstrbuf = r_config_get_i (core.config, "bin.maxstrbuf");
 
@@ -926,12 +938,15 @@ int main(int argc, char **argv) {
 	if (!r_bin_load (bin, file, baddr, laddr, xtr_idx, fd, rawstr)) {
 		//if this return null means that we did not return a valid bin object
 		//but we have yet the chance that this file is a fat binary
-		if (!bin->cur->xtr_data) {
+		if (!bin->cur || !bin->cur->xtr_data) {
 			eprintf ("r_bin: Cannot open file\n");
 			r_core_fini (&core);
 			return 1;
 		}
 	}
+	/* required to automatically select a sub-bin when not specified */
+	(void)r_core_bin_update_arch_bits (&core);
+
 	if (baddr != UT64_MAX) {
 		r_bin_set_baddr (bin, baddr);
 	}
@@ -939,7 +954,6 @@ int main(int argc, char **argv) {
 		rawstr = false;
 		r_bin_dump_strings (core.bin->cur, bin->minstrlen);
 	}
-
 	if (query) {
 		if (rad) {
 			r_core_bin_export_info_rad (&core);
@@ -1057,6 +1071,7 @@ int main(int argc, char **argv) {
 	run_action ("strings", R_BIN_REQ_STRINGS, R_CORE_BIN_ACC_STRINGS);
 	run_action ("info", R_BIN_REQ_INFO, R_CORE_BIN_ACC_INFO);
 	run_action ("fields", R_BIN_REQ_FIELDS, R_CORE_BIN_ACC_FIELDS);
+	run_action ("header", R_BIN_REQ_HEADER, R_CORE_BIN_ACC_HEADER);
 	run_action ("libs", R_BIN_REQ_LIBS, R_CORE_BIN_ACC_LIBS);
 	run_action ("relocs", R_BIN_REQ_RELOCS, R_CORE_BIN_ACC_RELOCS);
 	run_action ("dwarf", R_BIN_REQ_DWARF, R_CORE_BIN_ACC_DWARF);

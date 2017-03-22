@@ -71,45 +71,27 @@ static void cmd_fz(RCore *core, const char *input) {
 	}
 }
 
-static void flagbars(RCore *core) {
-	int total = 0;
-	int cols = r_cons_get_size (NULL);
-	RListIter *iter;
-	RFlagItem *flag;
-	r_list_foreach (core->flags->flags, iter, flag) {
-		total += flag->offset;
-	}
-	if (!total) // avoid a division by zero
-		return;
-	cols -= 15;
-	r_cons_printf ("Total: %d\n", total);
-	r_list_foreach (core->flags->flags, iter, flag) {
-		ut32 pbar_val = flag->offset>0 ? flag->offset : 1;
-		r_cons_printf ("%10s %.8"PFMT64d, flag->name, flag->offset);
-		r_print_progressbar (core->print,
-			(pbar_val*100)/total, cols);
-		r_cons_newline ();
-	}
-}
 
-static void flagbars_dos(RCore *core) {
-	int total = 0;
+static void flagbars(RCore *core, const char *glob) {
 	int cols = r_cons_get_size (NULL);
 	RListIter *iter;
 	RFlagItem *flag;
-	r_list_foreach (core->flags->flags, iter, flag) {
-		total = R_MAX(total,flag->offset);
+	cols -= 80;
+	if (cols < 0) {
+		cols += 80;
 	}
-	if (!total) // avoid a division by zero
-		return;
-	cols-=15;
-	r_cons_printf ("Total: %d\n", total);
 	r_list_foreach (core->flags->flags, iter, flag) {
-		ut32 pbar_val = flag->offset>0 ? flag->offset : 1;
-		r_cons_printf ("%10s %.8"PFMT64d, flag->name, flag->offset);
-		r_print_progressbar (core->print,
-			(pbar_val*100)/total, cols);
-		r_cons_newline ();
+		ut64 min = 0, max = r_io_size (core->io);
+		RIOSection *s = r_io_section_vget (core->io, flag->offset); 
+		if (s) {
+			min = s->vaddr;
+			max = s->vaddr + s->size;
+		}
+		if (r_str_glob (flag->name, glob)) {
+			r_cons_printf ("0x%08"PFMT64x" ", flag->offset);
+			r_print_rangebar (core->print, flag->offset, flag->offset + flag->size, min, max, cols);
+			r_cons_printf ("  %s\n", flag->name);
+		}
 	}
 }
 
@@ -147,14 +129,15 @@ rep:
 		break;
 	case '=': // "f="
 		switch (input[1]) {
-		case '=':
-			flagbars_dos (core);
+		case ' ':
+			flagbars (core, input + 2);
 			break;
-		case '?':
-			eprintf ("Usage: f= or f== to display flag bars\n");
+		case 0:
+			flagbars (core, NULL);
 			break;
 		default:
-			flagbars (core);
+		case '?':
+			eprintf ("Usage: f= [glob] to grep for matching flag names\n");
 			break;
 		}
 		break;
@@ -372,6 +355,9 @@ eprintf ("WTF 'f .xxx' adds a variable to the function? ?!!?(%s)\n");
 		}
 		break;
 	case 'l': // "fl"
+		if (input[1] == '?') { // "fl?"
+			eprintf ("Usage: fl[a] [flagname] [flagsize]\n");
+		} else
 		if (input[1] == 'a') { // "fla"
 			// TODO: we can optimize this if core->flags->flags is sorted by flagitem->offset
 			char *glob = strchr (input, ' ');
@@ -403,14 +389,21 @@ eprintf ("WTF 'f .xxx' adds a variable to the function? ?!!?(%s)\n");
 			if (p) {
 				*p++ = 0;
 				item = r_flag_get_i (core->flags,
-					r_num_math (core->num, str));
+					r_num_math (core->num, arg));
 				if (item)
 					item->size = r_num_math (core->num, p);
 			} else {
-				item = r_flag_get_i (core->flags,
-					r_num_math (core->num, str));
-				if (item)
-					r_cons_printf ("0x%08"PFMT64x"\n", item->size);
+				if (*arg) {
+					item = r_flag_get_i (core->flags, core->offset);
+					if (item) {
+						item->size = r_num_math (core->num, arg);
+					}
+				} else {
+					item = r_flag_get_i (core->flags, r_num_math (core->num, arg));
+					if (item) {
+						r_cons_printf ("0x%08"PFMT64x"\n", item->size);
+					}
+				}
 			}
 			free (arg);
 		} else { // "fl"
@@ -594,32 +587,47 @@ eprintf ("WTF 'f .xxx' adds a variable to the function? ?!!?(%s)\n");
 		break;
 	case 'o':
 		{ // TODO: use file.fortunes // can be dangerous in sandbox mode
-			char *fortunes_tips = R2_PREFIX "/share/doc/radare2/fortunes.tips";
-			char *fortunes_fun = R2_PREFIX "/share/doc/radare2/fortunes.fun";
-			char *fortunes_nsfw = R2_PREFIX "/share/doc/radare2/fortunes.nsfw";
-			char *types = (char *)r_config_get (core->config, "cfg.fortunetype");
+			const char *fortunes_tips = R2_PREFIX "/share/doc/radare2/fortunes.tips";
+			const char *fortunes_fuun = R2_PREFIX "/share/doc/radare2/fortunes.fun";
+			const char *fortunes_nsfw = R2_PREFIX "/share/doc/radare2/fortunes.nsfw";
+			const char *fortunes_crep = R2_PREFIX "/share/doc/radare2/fortunes.creepy";
+			const char *types = (char *)r_config_get (core->config, "cfg.fortunes.type");
 			char *line = NULL, *templine = NULL;
 			int i = 0;
-			if (strstr(types, "tips")) {
+			if (strstr (types, "tips")) {
 				templine = r_file_slurp_random_line_count (fortunes_tips, &i);
 				line = templine;
 			}
-			if (strstr(types, "fun")) {
-				templine = r_file_slurp_random_line_count (fortunes_fun, &i);
+			if (strstr (types, "fun")) {
+				templine = r_file_slurp_random_line_count (fortunes_fuun, &i);
 				if (templine) {
 					free (line);
 					line = templine;
 				}
 			}
-			if (strstr(types, "nsfw")) {
+			if (strstr (types, "nsfw")) {
 				templine = r_file_slurp_random_line_count (fortunes_nsfw, &i);
 				if (templine) {
 					free (line);
 					line = templine;
 				}
 			}
+			if (strstr (types, "creepy")) {
+				templine = r_file_slurp_random_line_count (fortunes_crep, &i);
+				if (templine) {
+					free (line);
+					line = templine;
+				}
+			}
 			if (line) {
-				r_cons_printf (" -- %s\n", line);
+				if (r_config_get_i (core->config, "cfg.fortunes.clippy")) {
+					r_core_clippy (line);
+				} else {
+					r_cons_printf (" -- %s\n", line);
+				}
+				if (r_config_get_i (core->config, "cfg.fortunes.tts")) {
+					r_sys_tts (line, true);
+				}
 				free (line);
 			}
 		}
@@ -689,11 +697,14 @@ eprintf ("WTF 'f .xxx' adds a variable to the function? ?!!?(%s)\n");
 		break;
 	case 'd': // "fd"
 		{
-			ut64 addr = 0;
+			ut64 addr = core->offset;
 			RFlagItem *f = NULL;
+			bool space_strict = true;
 			switch (input[1]) {
 			case '?':
-				eprintf ("Usage: fd [offset|flag|expression]\n");
+				eprintf ("Usage: fd[d] [offset|flag|expression]\n");
+				eprintf ("  fd $$   # describe flag + delta for given offset\n");
+				eprintf ("  fdd $$  # describe flag without space restrictions\n");
 				if (str) {
 					free (str);
 				}
@@ -701,11 +712,17 @@ eprintf ("WTF 'f .xxx' adds a variable to the function? ?!!?(%s)\n");
 			case '\0':
 				addr = core->offset;
 				break;
+			case 'd':
+				space_strict = false;
+				if (input[2] == ' ') {
+					addr = r_num_math (core->num, input + 3);
+				}
+				break;
 			default:
 				addr = r_num_math (core->num, input + 2);
 				break;
 			}
-			core->flags->space_strict = true;
+			core->flags->space_strict = space_strict;
 			f = r_flag_get_at (core->flags, addr, true);
 			core->flags->space_strict = false;
 			if (f) {
@@ -735,6 +752,7 @@ eprintf ("WTF 'f .xxx' adds a variable to the function? ?!!?(%s)\n");
 		"f-","name","remove flag 'name'",
 		"f-","@addr","remove flag at address expression",
 		"f."," fname","list all local labels for the given function",
+		"f="," [glob]","list range bars graphics with flag offsets and sizes",
 		"fa"," [name] [alias]","alias a flag to evaluate an expression",
 		"fb"," [addr]","set base address for new flags",
 		"fb"," [addr] [flag*]","move flags matching 'flag' to relative addr",
@@ -746,7 +764,7 @@ eprintf ("WTF 'f .xxx' adds a variable to the function? ?!!?(%s)\n");
 		"fi"," [size] | [from] [to]","show flags in current block or range",
 		"fg","","bring visual mode to foreground",
 		"fj","","list flags in JSON format",
-		"fl"," [flag] [size]","show or set flag length (size)",
+		"fl"," ([flag]) [size]","show or set flag length (size)",
 		"fla"," [glob]","automatically compute the size of all flags matching glob",
 		"fm"," addr","move flag at current offset to new address",
 		"fn","","list flags displaying the real name (demangled)",

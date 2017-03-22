@@ -52,7 +52,7 @@ RebuildCapstone() {
 
 RebuildSdb() {
 	Rebuild shlr/sdb
-	Rebuild libr/db
+	Rebuild libr/util
 }
 
 RebuildBin() {
@@ -70,6 +70,7 @@ case "$1" in
 bin)    RebuildBin ; ;;
 gdb)    RebuildGdb ; ;;
 sdb)    RebuildSdb ; ;;
+spp)    RebuildSpp ; ;;
 bin)    RebuildBin ; ;;
 java)   RebuildJava ; ;;
 iosdbg) RebuildIOSDebug ; ;;

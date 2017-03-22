@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2012-2016 - pancake */
+/* radare - LGPL - Copyright 2012-2017 - pancake */
 
 #include <r_anal.h>
 
@@ -72,14 +72,17 @@ static ut64 is_pointer(RAnal *anal, const ut8 *buf, int size) {
 #endif
 }
 
-static int is_bin(const ut8 *buf, int size) {
-	// TODO: add more
-	if ((size >= 4 && !memcmp (buf, "\xcf\xfa\xed\xfe", 4)))
+static bool is_bin(const ut8 *buf, int size) {
+	// TODO: add more magic signatures heres
+	if ((size >= 4 && !memcmp (buf, "\xcf\xfa\xed\xfe", 4))) {
 		return true;
-	if ((size >= 4 && !memcmp (buf, "\x7e" "ELF", 4)))
+	}
+	if ((size >= 4 && !memcmp (buf, "\x7f\x45\x4c\x46", 4))) { // \x7fELF
 		return true;
-	if ((size >= 2 && !memcmp (buf, "MZ", 2)))
+	}
+	if ((size >= 2 && !memcmp (buf, "MZ", 2))) {
 		return true;
+	}
 	return false;
 }
 
@@ -112,7 +115,6 @@ R_API char *r_anal_data_to_string(RAnalData *d) {
 		int msz = mallocsz - idx;
 		snprintf (line + idx, msz, "..");
 		idx += 2;
-		msz -= 2;
 	}
 	strcat (line, "  ");
 	idx += 2;
@@ -120,7 +122,6 @@ R_API char *r_anal_data_to_string(RAnalData *d) {
 		switch (d->type) {
 		case R_ANAL_DATA_TYPE_STRING:
 			snprintf (line + idx, mallocsz - idx, "string \"%s\"", d->str);
-			idx = strlen (line);
 			break;
 		case R_ANAL_DATA_TYPE_WIDE_STRING:
 			strcat (line, "wide string");

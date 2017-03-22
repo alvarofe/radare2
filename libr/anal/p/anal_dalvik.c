@@ -40,8 +40,9 @@ static int dalvik_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int l
 		{
 			ut32 vB = (data[1] & 0x0f);
 			ut32 vA = (data[1] & 0xf0) >> 4;
-			op->stackop = R_ANAL_STACK_SET;
-			op->ptr = -vA;
+			// op->stackop = R_ANAL_STACK_SET;
+			op->ptr = -vA; // why
+			op->val = vA;
 			esilprintf (op, "0x%"PFMT64x",v%d,=", vA, vB);
 		}
 		break;
@@ -71,6 +72,7 @@ static int dalvik_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int l
 			int vA = (int) data[1];
 			ut32 vB = (data[3] << 8) | data[2];
 			esilprintf (op, "v%d,v%d,=", vA, vB);
+			op->val = vB;
 		}
 		break;
 	case 0x0a: // move-result

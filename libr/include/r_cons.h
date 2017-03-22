@@ -58,6 +58,7 @@ typedef struct r_cons_grep_t {
 	bool charCounter;
 	int less;
 	int json;
+	char *json_path;
 	int range_line;
 	int line;
 	int sort;
@@ -89,6 +90,7 @@ typedef struct r_cons_palette_t {
 	char *fline;
 	char *floc;
 	char *flow;
+	char *flow2;
 	char *fname;
 	char *help;
 	char *input;
@@ -201,12 +203,6 @@ typedef struct r_cons_canvas_t {
 typedef char *(*RConsEditorCallback)(void *core, const char *file, const char *str);
 typedef int (*RConsClickCallback)(void *core, int x, int y);
 
-#if 0
-r_cons_click_begin();
-r_cons_click_end();
-r_cons_click_clear();
-#endif
-
 typedef struct r_cons_t {
 	RConsGrep grep;
 	RStack *cons_stack;
@@ -269,7 +265,10 @@ typedef struct r_cons_t {
 	bool use_utf8; // use utf8 features
 	int linesleep;
 	int pagesize;
+	char *break_word;
+	int break_word_len;
 	ut64 timeout;
+	bool use_color;
 } RCons;
 
 // XXX THIS MUST BE A SINGLETON AND WRAPPED INTO RCons */
@@ -423,12 +422,13 @@ R_API void r_cons_canvas_fill(RConsCanvas *c, int x, int y, int w, int h, char c
 R_API RCons *r_cons_new (void);
 R_API RCons *r_cons_singleton (void);
 R_API RCons *r_cons_free (void);
-R_API char *r_cons_lastline (void);
+R_API char *r_cons_lastline (int *size);
 
 typedef void (*RConsBreak)(void *);
 R_API void r_cons_break_end(void);
-R_API bool r_cons_is_breaked();
+R_API bool r_cons_is_breaked(void);
 R_API void r_cons_break_timeout(int timeout);
+R_API void r_cons_breakword(const char *s);
 
 /* pipe */
 R_API int r_cons_pipe_open(const char *file, int fdn, int append);
@@ -438,11 +438,11 @@ R_API void r_cons_pipe_close(int fd);
 R_API int r_cons_w32_print(const ut8 *ptr, int len, int empty);
 #endif
 
-R_API void r_cons_push();
-R_API void r_cons_pop();
-R_API void r_cons_break_pop();
+R_API void r_cons_push(void);
+R_API void r_cons_pop(void);
+R_API void r_cons_break_pop(void);
 R_API void r_cons_break_push(RConsBreak cb, void*user);
-R_API void r_cons_break_clear();
+R_API void r_cons_break_clear(void);
 
 /* control */
 R_API char *r_cons_editor (const char *file, const char *str);
@@ -461,18 +461,19 @@ R_API void r_cons_gotoxy(int x, int y);
 R_API void r_cons_show_cursor (int cursor);
 R_API char *r_cons_swap_ground(const char *col);
 R_API bool r_cons_drop (int n);
-R_API void r_cons_chop ();
+R_API void r_cons_chop (void);
 R_API void r_cons_set_raw(int b);
 R_API void r_cons_set_interactive(int b);
 R_API void r_cons_set_last_interactive(void);
 
 /* output */
 R_API void r_cons_printf(const char *format, ...);
+R_API void r_cons_printf_list(const char *format, va_list ap);
 R_API void r_cons_strcat(const char *str);
 #define r_cons_print(x) r_cons_strcat (x)
 R_API void r_cons_println(const char* str);
 R_API void r_cons_strcat_justify (const char *str, int j, char c);
-R_API void r_cons_memcat(const char *str, int len);
+R_API int r_cons_memcat(const char *str, int len);
 R_API void r_cons_newline(void);
 R_API void r_cons_filter(void);
 R_API void r_cons_flush(void);
@@ -505,17 +506,17 @@ R_API char *r_cons_rgb_tostring(ut8 r, ut8 g, ut8 b);
 R_API void r_cons_pal_list (int rad, const char *arg);
 R_API void r_cons_pal_show (void);
 R_API int r_cons_get_size(int *rows);
-R_API bool r_cons_isatty();
+R_API bool r_cons_isatty(void);
 R_API int r_cons_get_cursor(int *rows);
 R_API int r_cons_arrow_to_hjkl(int ch);
 R_API int r_cons_html_print(const char *ptr);
 
 // TODO: use gets() .. MUST BE DEPRECATED
 R_API int r_cons_fgets(char *buf, int len, int argc, const char **argv);
-R_API char *r_cons_hud(RList *list, const char *prompt, const bool usecolor);
-R_API char *r_cons_hud_path(const char *path, int dir, const bool usecolor);
-R_API char *r_cons_hud_string(const char *s, const bool usecolor);
-R_API char *r_cons_hud_file(const char *f, const bool usecolor);
+R_API char *r_cons_hud(RList *list, const char *prompt);
+R_API char *r_cons_hud_path(const char *path, int dir);
+R_API char *r_cons_hud_string(const char *s);
+R_API char *r_cons_hud_file(const char *f);
 
 R_API const char *r_cons_get_buffer(void);
 R_API void r_cons_grep(const char *str);
@@ -596,8 +597,8 @@ R_API RLine *r_line_singleton(void);
 R_API void r_line_free(void);
 R_API char *r_line_get_prompt (void);
 R_API void r_line_set_prompt(const char *prompt);
-R_API int r_line_dietline_init();
-R_API void r_line_hist_free();
+R_API int r_line_dietline_init(void);
+R_API void r_line_hist_free(void);
 
 typedef int (RLineReadCallback) (void *user, const char *line);
 R_API const char *r_line_readline(void);
@@ -632,6 +633,7 @@ typedef struct r_ascii_node_t {
 	int is_dummy;
 	int is_reversed;
 	int klass;
+	bool is_mini;
 } RANode;
 
 #define R_AGRAPH_MODE_NORMAL 0
@@ -651,6 +653,7 @@ typedef struct r_ascii_graph_t {
 	Sdb *db;
 	Sdb *nodes; // Sdb with title(key)=RANode*(value)
 
+	int layout;
 	int is_instep;
 	int mode;
 	int is_callgraph;
@@ -658,8 +661,8 @@ typedef struct r_ascii_graph_t {
 	int movspeed;
 
 	RANode *update_seek_on;
-	int need_reload_nodes;
-	int need_set_layout;
+	bool need_reload_nodes;
+	bool need_set_layout;
 	int need_update_dim;
 	int force_update_seek;
 

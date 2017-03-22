@@ -48,6 +48,7 @@ R_API bool r_anal_op_fini(RAnalOp *op) {
 	op->src[2] = NULL;
 	r_anal_value_free (op->dst);
 	op->dst = NULL;
+	r_strbuf_fini (&op->opex);
 	r_strbuf_fini (&op->esil);
 	r_anal_switch_op_free (op->switch_op);
 	R_FREE (op->mnemonic);
@@ -95,6 +96,11 @@ R_API int r_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 	}
 	memset (op, 0, sizeof (RAnalOp));
 	if (len > 0 && anal->cur && anal->cur->op) {
+		//use core binding to set asm.bits correctly based on the addr
+		//this is because of the hassle of arm/thumb
+		if (anal && anal->coreb.archbits) {
+			anal->coreb.archbits (anal->coreb.core, addr);
+		}
 		ret = anal->cur->op (anal, op, addr, data, len);
 		op->addr = addr;
 		/* consider at least 1 byte to be part of the opcode */
@@ -122,9 +128,11 @@ R_API int r_anal_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int le
 	return ret;
 }
 
-R_API RAnalOp *r_anal_op_copy (RAnalOp *op) {
+R_API RAnalOp *r_anal_op_copy(RAnalOp *op) {
 	RAnalOp *nop = R_NEW0 (RAnalOp);
-	if (!nop) return NULL;
+	if (!nop) {
+		return NULL;
+	}
 	*nop = *op;
 	if (op->mnemonic) {
 		nop->mnemonic = strdup (op->mnemonic);
@@ -145,7 +153,7 @@ R_API RAnalOp *r_anal_op_copy (RAnalOp *op) {
 }
 
 // TODO: return RAnalException *
-R_API int r_anal_op_execute (RAnal *anal, RAnalOp *op) {
+R_API int r_anal_op_execute(RAnal *anal, RAnalOp *op) {
 	while (op) {
 		if (op->delay > 0) {
 			anal->queued = r_anal_op_copy (op);

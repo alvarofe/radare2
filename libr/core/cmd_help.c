@@ -57,7 +57,7 @@ static char *filterFlags(RCore *core, const char *msg) {
 	return buf;
 }
 
-static void clippy(const char *msg) {
+R_API void r_core_clippy(const char *msg) {
 	int msglen = strlen (msg);
 	char *l = strdup (r_str_pad ('-', msglen));
 	char *s = strdup (r_str_pad (' ', msglen));
@@ -248,7 +248,7 @@ static int cmd_help(void *data, const char *input) {
 				}
 				free (ops);
 			}
-		} else if (input[1] && !IS_NUMBER (input[2])) {
+		} else if (input[1] && !IS_DIGIT (input[2])) {
 			r_cons_printf ("%d\n", r_asm_mnemonics_byname (core->assembler, input + 2));
 		} else {
 			bool json = false;
@@ -408,51 +408,16 @@ static int cmd_help(void *data, const char *input) {
 		break;
 	case '@':
 		{
-		const char* help_msg[] = {
-			"Usage: [.][#]<cmd>[*] [`cmd`] [@ addr] [~grep] [|syscmd] [>[>]file]", "", "",
-			"0", "", "alias for 's 0'",
-			"0x", "addr", "alias for 's 0x..'",
-			"#", "cmd", "if # is a number repeat the command # times",
-			"/*", "", "start multiline comment",
-			"*/", "", "end multiline comment",
-			".", "cmd", "execute output of command as r2 script",
-			".:", "8080", "wait for commands on port 8080",
-			".!", "rabin2 -re $FILE", "run command output as r2 script",
-			"*", "", "output of command in r2 script format (CC*)",
-			"j", "", "output of command in JSON format (pdj)",
-			"~", "?", "count number of lines (like wc -l)",
-			"~", "??", "show internal grep help",
-			"~", "..", "internal less",
-			"~", "{}", "json indent",
-			"~", "{}..", "json indent and less",
-			"~", "word", "grep for lines matching word",
-			"~", "!word", "grep for lines NOT matching word",
-			"~", "word[2]", "grep 3rd column of lines matching word",
-			"~", "word:3[0]", "grep 1st column from the 4th line matching word",
-			"@", " 0x1024", "temporary seek to this address (sym.main+3)",
-			"@", " addr[!blocksize]", "temporary set a new blocksize",
-			"@a:", "arch[:bits]", "temporary set arch and bits",
-			"@b:", "bits", "temporary set asm.bits",
-			"@e:", "k=v,k=v", "temporary change eval vars",
-			"@r:", "reg", "tmp seek to reg value (f.ex pd@r:PC)",
-			"@i:", "nth.op", "temporary seek to the Nth relative instruction",
-			"@f:", "file", "temporary replace block with file contents",
-			"@o:", "fd", "temporary switch to another fd",
-			"@s:", "string", "same as above but from a string",
-			"@x:", "909192", "from hex pairs string",
-			"@..", "from to", "temporary set from and to for commands supporting ranges",
-			"@@=", "1 2 3", "run the previous command at offsets 1, 2 and 3",
-			"@@", " hit*", "run the command on every flag matching 'hit*'",
-			"@@?", "[ktfb..]", "show help for the iterator operator",
-			"@@@", " [type]", "run a command on every [type] (see @@@? for help)",
-			">", "file", "pipe output of command to file",
-			">>", "file", "append to file",
-			"`", "pdi~push:0[0]`",  "replace output of command inside the line",
-			"|", "cmd", "pipe output to command (pd|less) (.dr*)",
-			NULL};
-		r_core_cmd_help (core, help_msg);
-		return 0;
+		if (input[1] == '@'){
+			helpCmdForeach (core);
+		} else {
+			helpCmdAt (core);
 		}
+		}
+		break;
+	case '&':
+		helpCmdTasks (core);
+		break;
 	case '$':
 		if (input[1] == '?') {
 			const char* help_msg[] = {
@@ -463,7 +428,7 @@ static int cmd_help(void *data, const char *input) {
 			"$b", "", "block size",
 			"$B", "", "base address (aligned lowest map address)",
 			"$f", "", "jump fail address (e.g. jz 0x10 => next instruction)",
-			"$fl", "", "flag length (size) at current address (fla; pD $l @ entry0)"
+			"$fl", "", "flag length (size) at current address (fla; pD $l @ entry0)",
 			"$F", "", "current function size",
 			"$FB", "", "begin of function",
 			"$Fb", "", "address of the current basic block",
@@ -524,11 +489,15 @@ static int cmd_help(void *data, const char *input) {
 			}
 			break;
 		case 0:
+#if R2_VERSION_COMMIT == 0
+			r_cons_printf ("%s release\n", R2_VERSION);
+#else
 			if (!strcmp (R2_VERSION, R2_GITTAP)) {
 				r_cons_printf ("%s %d\n", R2_VERSION, R2_VERSION_COMMIT);
 			} else {
 				r_cons_printf ("%s aka %s commit %d\n", R2_VERSION, R2_GITTAP, R2_VERSION_COMMIT);
 			}
+#endif
 			break;
 		case 'j':
 			r_cons_printf ("{\"system\":\"%s-%s\"", R_SYS_OS, R_SYS_ARCH);
@@ -556,7 +525,7 @@ static int cmd_help(void *data, const char *input) {
 			out[len] = 0;
 			r_cons_println ((const char*)out);
 			free (out);
-		} else if (!strncmp (input, "0x", 2) || (*input>='0' && *input<='9')) {
+		} else if (*input == '+') {
 			ut64 n = r_num_math (core->num, input);
 			int bits = r_num_to_bits (NULL, n) / 8;
 			for (i = 0; i < bits; i++) {
@@ -564,6 +533,9 @@ static int cmd_help(void *data, const char *input) {
 			}
 			r_cons_newline ();
 		} else {
+			if (*input == ' ') {
+				input++;
+			}
 			for (i = 0; input[i]; i++) {
 				r_cons_printf ("%02x", input[i]);
 			}
@@ -571,10 +543,18 @@ static int cmd_help(void *data, const char *input) {
 		}
 		break;
 	case 'E': // clippy echo
-		clippy (r_str_chop_ro (input + 1));
+		r_core_clippy (r_str_chop_ro (input + 1));
 		break;
 	case 'e': // echo
 		{
+		if (input[1] == 's') { // say
+			char *msg = strdup (input + 2);
+			msg = r_str_chop (msg);
+			char *p = strchr (msg, '&');
+			if (p) *p = 0;
+			r_sys_tts (msg, p != NULL);
+			free (msg);
+		} else
 		if (input[1] == 'n') { // mimic echo -n
 			const char *msg = r_str_chop_ro (input+2);
 			// TODO: replace all ${flagname} by its value in hexa
@@ -619,32 +599,44 @@ static int cmd_help(void *data, const char *input) {
 		if (core->io->va) {
 			ut64 o, n = (input[0] && input[1])?
 				r_num_math (core->num, input+2): core->offset;
-			o = r_io_section_maddr_to_vaddr (core->io, n);
-			r_cons_printf ("0x%08"PFMT64x"\n", o);
-		} else {
-			eprintf ("io.va is false\n");
-		}
+			RIOSection *sec = r_io_section_get (core->io, n);
+			if (sec) {
+				o = n + sec->vaddr - sec->paddr;
+				r_cons_printf ("0x%08"PFMT64x"\n", o);
+			} else 	eprintf ("no sections at 0x%08"PFMT64x"\n", n);
+		} else eprintf ("io.va is false\n");
 		break;
 	case 'p':
 		if (core->io->va) {
 			// physical address
 			ut64 o, n = (input[0] && input[1])?
 				r_num_math (core->num, input + 2): core->offset;
-			o = r_io_section_vaddr_to_maddr (core->io, n);
-			r_cons_printf ("0x%08"PFMT64x"\n", o);
-		} else {
-			eprintf ("Virtual addresses not enabled!\n");
-		}
+			RIOSection *sec = r_io_section_vget (core->io, n);
+			if (sec) {
+				o = n - sec->vaddr + sec->paddr;
+				r_cons_printf ("0x%08"PFMT64x"\n", o);
+			} else eprintf ("no section at 0x%08"PFMT64x"\n", n);
+		} else eprintf ("Virtual addresses not enabled!\n");
 		break;
 	case 'S': {
 		// section name
 		RIOSection *s;
+		SdbList *sections;
+		SdbListIter *iter;
 		ut64 n = (input[0] && input[1])?
 			r_num_math (core->num, input+2): core->offset;
+#if 0
 		n = r_io_section_vaddr_to_maddr_try (core->io, n);
 		s = r_io_section_mget_in (core->io, n);
 		if (s && *(s->name)) {
 			r_cons_println (s->name);
+		}
+#endif
+		if ((sections = r_io_section_get_secs_at (core->io, n))) {
+			ls_foreach (sections, iter, s) {
+				r_cons_printf ("%s\n", s->name);
+			}
+			ls_free (sections);
 		}
 		break;
 		}
@@ -687,7 +679,7 @@ static int cmd_help(void *data, const char *input) {
 				snprintf (foo, sizeof (foo) - 1, "%s: ", input);
 				r_line_set_prompt (foo);
 				r_cons_fgets (foo, sizeof (foo)-1, 0, NULL);
-				foo[strlen (foo)] = 0;
+				foo[sizeof (foo) - 1] = 0;
 				r_core_yank_set_str (core, R_CORE_FOREIGN_ADDR, foo, strlen (foo) + 1);
 				core->num->value = r_num_math (core->num, foo);
 				}
@@ -699,7 +691,7 @@ static int cmd_help(void *data, const char *input) {
 	case 'w':
 		{
 		ut64 addr = r_num_math (core->num, input + 1);
-		const char *rstr = core->print->hasrefs (core->print->user, addr);
+		const char *rstr = core->print->hasrefs (core->print->user, addr, true);
 		r_cons_println (rstr);
 		}
 		break;
@@ -714,7 +706,7 @@ static int cmd_help(void *data, const char *input) {
 	case '?': // "??" "???"
 		if (input[1]=='?') {
 			if (input[2]=='?') {
-				clippy ("What are you doing?");
+				r_core_clippy ("What are you doing?");
 				return 0;
 			}
 			if (input[2]) {
@@ -763,7 +755,9 @@ static int cmd_help(void *data, const char *input) {
 			"?v", " eip-0x804800", "show hex value of math expr",
 			"?vi", " rsp-rbp", "show decimal value of math expr",
 			"?w", " addr", "show what's in this address (like pxr/pxq does)",
-			"?x", " num|str|-hexst", "returns the hexpair of number or string",
+			"?x", "+num", "like ?v, but in hexpairs honoring cfg.bigendian",
+			"?x", " str", "returns the hexpair of number or string",
+			"?x", "-hexst", "convert hexpair into raw string with newline",
 			"?y", " [str]", "show contents of yank buffer, or set with string",
 			NULL};
 			r_core_cmd_help (core, help_msg);
@@ -786,7 +780,7 @@ static int cmd_help(void *data, const char *input) {
 		"*", "[?] off[=[0x]value]", "Pointer read/write data/values (see ?v, wx, wv)",
 		"(macro arg0 arg1)",  "", "Manage scripting macros",
 		".", "[?] [-|(m)|f|!sh|cmd]", "Define macro or load r2, cparse or rlang file",
-		"=","[?] [cmd]", "Run this command via rap://",
+		"=","[?] [cmd]", "Send/Listen for Remote Commands (rap://, http://, <fd>)",
 		"/","[?]", "Search for bytes, regexps, patterns, ..",
 		"!","[?] [cmd]", "Run given command as in system(3)",
 		"#","[?] !lang [..]", "Hashbang to run an rlang script",

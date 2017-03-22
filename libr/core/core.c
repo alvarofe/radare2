@@ -23,6 +23,8 @@ static ut64 letter_divs[R_CORE_ASMQJMPS_LEN_LETTERS - 1] = {
 static const char *tmp_argv[TMP_ARGV_SZ];
 static bool tmp_argv_heap = false;
 
+extern int r_is_heap (void *p);
+
 static void r_line_free_autocomplete(RLine *line) {
 	int i;
 	if (tmp_argv_heap) {
@@ -203,6 +205,11 @@ static const char *getName(RCore *core, ut64 addr) {
 	return item ? item->name : NULL;
 }
 
+static void archbits(RCore *core, ut64 addr) {
+	r_anal_build_range_on_hints (core->anal);
+	r_core_seek_archbits (core, addr);
+}
+
 R_API int r_core_bind(RCore *core, RCoreBind *bnd) {
 	bnd->core = core;
 	bnd->bphit = (RCoreDebugBpHit)r_core_debug_breakpoint_hit;
@@ -211,6 +218,7 @@ R_API int r_core_bind(RCore *core, RCoreBind *bnd) {
 	bnd->puts = (RCorePuts)r_cons_strcat;
 	bnd->setab = (RCoreSetArchBits)setab;
 	bnd->getName = (RCoreGetName)getName;
+	bnd->archbits = (RCoreSeekArchBits)archbits;
 	return true;
 }
 
@@ -222,9 +230,38 @@ R_API RCore *r_core_cast(void *p) {
 	return (RCore*)p;
 }
 
-static int core_cmd_callback (void *user, const char *cmd) {
+static void core_post_write_callback(void *user, ut64 maddr, ut8 *bytes, int cnt) {
 	RCore *core = (RCore *)user;
-	return r_core_cmd0 (core, cmd);
+	RIOSection *sec;
+	ut64 vaddr;
+
+	if (!r_config_get_i (core->config, "asm.cmtpatch")) {
+		return;
+	}
+
+	char *hex_pairs = r_hex_bin2strdup (bytes, cnt);
+	if (!hex_pairs) {
+		eprintf ("core_post_write_callback: Cannot obtain hex pairs\n");
+		return;
+	}
+
+	char *comment = r_str_newf ("patch: %d bytes (%s)", cnt, hex_pairs);
+	free (hex_pairs);
+	if (!comment) {
+		eprintf ("core_post_write_callback: Cannot create comment\n");
+		return;
+	}
+
+	sec = r_io_section_get (core->io, maddr); 
+	vaddr = sec ? (sec->vaddr + maddr - sec->paddr) : maddr;
+
+	r_meta_add (core->anal, R_META_TYPE_COMMENT, vaddr, vaddr, comment);
+	free (comment);
+}
+
+static int core_cmd_callback (void *user, const char *cmd) {
+    RCore *core = (RCore *)user;
+    return r_core_cmd0 (core, cmd);
 }
 
 static char *core_cmdstr_callback (void *user, const char *cmd) {
@@ -340,7 +377,7 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 		// push state
 		if (str[0] && str[1]) {
 			const char *q;
-			char *o = strdup (str+1);
+			char *o = strdup (str + 1);
 			if (o) {
 				q = r_num_calc_index (core->num, NULL);
 				if (q) {
@@ -372,7 +409,9 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 }
 		break;
 	case '$':
-		if (ok) *ok = 1;
+		if (ok) {
+			*ok = 1;
+		}
 		// TODO: group analop-dependant vars after a char, so i can filter
 		r_anal_op (core->anal, &op, core->offset, core->block, core->blocksize);
 		r_anal_op_fini (&op); // we dont need strings or pointers, just values, which are not nullified in fini
@@ -380,11 +419,11 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 		case '.': // can use pc, sp, a0, a1, ...
 			return r_debug_reg_get (core->dbg, str + 2);
 		case 'k':
-			if (str[2]!='{') {
+			if (str[2] != '{') {
 				eprintf ("Expected '{' after 'k'.\n");
 				break;
 			}
-			bptr = strdup (str+3);
+			bptr = strdup (str + 3);
 			ptr = strchr (bptr, '}');
 			if (!ptr) {
 				// invalid json
@@ -440,10 +479,10 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 		case 'B':
 		case 'M': {
 				ut64 lower = UT64_MAX;
-				RListIter *iter;
+				SdbListIter *iter;
 				RIOSection *s;
-				r_list_foreach (core->io->sections, iter, s) {
-					if (!s->vaddr && s->offset) {
+				ls_foreach (core->io->sections, iter, s) {
+					if (!s->vaddr && s->paddr) {
 						continue;
 					}
 					if (s->vaddr < lower) lower = s->vaddr;
@@ -462,18 +501,20 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 		case 'b': return core->blocksize;
 		case 's':
 			if (core->file) {
-				return r_io_desc_size (core->io, core->file->desc);
+				return r_io_desc_size (core->file->desc);
 			}
 			return 0LL;
 		case 'w':
 			return r_config_get_i (core->config, "asm.bits") / 8;
 		case 'S':
-			if ((s = r_io_section_vget (core->io, core->offset))) {
-				return (str[2] == 'S'? s->size: s->vaddr);
+			{
+				SdbList *secs = r_io_section_vget_secs_at (core->io, core->offset);
+				s = secs ? ls_pop (secs) : NULL;
+				ls_free (secs);
 			}
-			return 0LL;
+			return s? (str[2]=='S'? s->size: s->vaddr): 0LL;
 		case 'D':
-			if (IS_NUMBER (str[2])) {
+			if (IS_DIGIT (str[2])) {
 				return getref (core, atoi (str + 2), 'r', R_ANAL_REF_TYPE_DATA);
 			} else {
 				RDebugMap *map;
@@ -487,7 +528,15 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 			return 0LL; // maybe // return UT64_MAX;
 		case '?': return core->num->value;
 		case '$': return core->offset;
-		case 'o': return r_io_section_vaddr_to_maddr_try (core->io, core->offset);
+		case 'o': 
+			{
+				SdbList *secs;
+				RIOSection *s;
+				secs = r_io_section_vget_secs_at (core->io, core->offset);
+				s = secs ? ls_pop (secs) : NULL;
+				ls_free (secs);
+				return s ? core->offset - s->vaddr + s->paddr : core->offset;
+			}
 		case 'C': return getref (core, atoi (str + 2), 'r', R_ANAL_REF_TYPE_CALL);
 		case 'J': return getref (core, atoi (str + 2), 'r', R_ANAL_REF_TYPE_CODE);
 		case 'X': return getref (core, atoi (str + 2), 'x', R_ANAL_REF_TYPE_CALL);
@@ -508,7 +557,7 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 			return 0;
 		}
 		break;
-	default:
+		default:
 		if (*str>'A') {
 			// NOTE: functions override flags
 			RAnalFunction *fcn = r_anal_fcn_find_name (core->anal, str);
@@ -537,7 +586,9 @@ static ut64 num_callback(RNum *userptr, const char *str, int *ok) {
 
 R_API RCore *r_core_new() {
 	RCore *c = R_NEW0 (RCore);
-	if (!c) return NULL;
+	if (!c) {
+		return NULL;
+	}
 	r_core_init (c);
 	return c;
 }
@@ -558,7 +609,7 @@ static const char *radare_argv[] = {
 	"aa", "ab", "af", "ar", "ag", "at", "a?", "ax", "ad",
 	"ae", "aec", "aex", "aep", "aea", "aeA", "aes", "aeso", "aesu", "aesue", "aer", "aei", "aeim", "aef",
 	"aaa", "aac","aae", "aai", "aar", "aan", "aas", "aat", "aap", "aav",
-	"af", "afa", "afan", "afc", "afi", "afb", "afbb", "afn", "afr", "afs", "af*", "afv", "afvn",
+	"af", "afa", "afan", "afc", "afC", "afi", "afb", "afbb", "afn", "afr", "afs", "af*", "afv", "afvn",
 	"aga", "agc", "agd", "agl", "agfl",
 	"e", "et", "e-", "e*", "e!", "e?", "env ",
 	"i", "ii", "iI", "is", "iS", "iz",
@@ -566,11 +617,11 @@ static const char *radare_argv[] = {
 	"f", "fl", "fr", "f-", "f*", "fs", "fS", "fr", "fo", "f?",
 	"m", "m*", "ml", "m-", "my", "mg", "md", "mp", "m?",
 	"o", "o+", "oc", "on", "op", "o-", "x", "wf", "wF", "wta", "wtf", "wp",
-	"t", "to ", "t-", "tf", "td", "td-", "tb", "te", "tl", "tk", "ts",
+	"t", "to", "t-", "tf", "td", "td-", "tb", "tn", "te", "tl", "tk", "ts", "tu",
 	"(", "(*", "(-", "()", ".", ".!", ".(", "./",
 	"r", "r+", "r-",
 	"b", "bf", "b?",
-	"/", "//", "/a", "/c", "/h", "/m", "/x", "/v", "/v2", "/v4", "/v8", "/r"
+	"/", "//", "/a", "/c", "/h", "/m", "/x", "/v", "/v2", "/v4", "/v8", "/r", "/re",
 	"y", "yy", "y?",
 	"wx", "ww", "w?", "wxf",
 	"p6d", "p6e", "p8", "pb", "pc",
@@ -711,14 +762,14 @@ static int autocomplete(RLine *line) {
 			} else {
 				*pfx = 0;
 			}
-			RStrHT *sht = core->print->formats;
-			int *i, j = 0;
-			r_list_foreach (sht->ls, iter, i) {
-				int idx = ((int)(size_t)i)-1;
-				const char *key = r_strpool_get (sht->sp, idx);
+			SdbList *sls = sdb_foreach_list (core->print->formats, false);
+			SdbListIter *iter;
+			SdbKv *kv;
+			int j = 0;
+			ls_foreach (sls, iter, kv) {
 				int len = strlen (line->buffer.data + chr);
-				if (!len || !strncmp (line->buffer.data + chr, key, len)) {
-					tmp_argv[j++] = r_str_newf ("pf%s.%s", pfx, key);
+				if (!len || !strncmp (line->buffer.data + chr, kv->key, len)) {
+					tmp_argv[j++] = r_str_newf ("pf%s.%s", pfx, kv->key);
 				}
 			}
 			if (j > 0) tmp_argv_heap = true;
@@ -768,7 +819,7 @@ static int autocomplete(RLine *line) {
 			line->completion.argv = tmp_argv;
 		} else if ((!strncmp (line->buffer.data, "te ", 3))) {
 			int i = 0;
-			SdbList *l = sdb_foreach_list (core->anal->sdb_types);
+			SdbList *l = sdb_foreach_list (core->anal->sdb_types, true);
 			SdbListIter *iter;
 			SdbKv *kv;
 			int chr = 3;
@@ -965,6 +1016,24 @@ openfile:
 			tmp_argv[i] = NULL;
 			line->completion.argc = i;
 			line->completion.argv = tmp_argv;
+		} else if ((!strncmp (line->buffer.data, "afC ", 4))) {
+			// autocomplete afC
+			SdbList *ccs = sdb_foreach_list (core->anal->sdb_cc, true);
+			SdbKv *kv;
+			SdbListIter *iter;
+			int sdelta = 4;
+			int i = 0;
+			int n = strlen (line->buffer.data + sdelta);
+			ls_foreach (ccs, iter, kv) {
+				if (!strchr (kv->key, '.')) {
+					if (!strncmp (kv->key, line->buffer.data + sdelta, n)) {
+						tmp_argv[i++] = kv->key;
+					}
+				}
+			}
+			ls_free (ccs);
+			line->completion.argc = i;
+			line->completion.argv = tmp_argv;
 		} else if ((!strncmp (line->buffer.data, "s ", 2)) ||
 		    (!strncmp (line->buffer.data, "ad ", 3)) ||
 		    (!strncmp (line->buffer.data, "bf ", 3)) ||
@@ -988,6 +1057,8 @@ openfile:
 		    (!strncmp (line->buffer.data, "b ", 2)) ||
 		    (!strncmp (line->buffer.data, "dcu ", 4)) ||
 		    (!strncmp (line->buffer.data, "/v ", 3)) ||
+		    (!strncmp (line->buffer.data, "/r ", 3)) ||
+		    (!strncmp (line->buffer.data, "/re ", 4)) ||
 		    (!strncmp (line->buffer.data, "db ", 3)) ||
 		    (!strncmp (line->buffer.data, "db- ", 4)) ||
 		    (!strncmp (line->buffer.data, "f ", 2)) ||
@@ -1001,9 +1072,9 @@ openfile:
 			int sdelta = (line->buffer.data[1] == ' ')
 				? 2 : (line->buffer.data[2] == ' ')
 				? 3 : 4;
-			n = strlen (line->buffer.data+sdelta);
+			n = strlen (line->buffer.data + sdelta);
 			r_list_foreach (core->flags->flags, iter, flag) {
-				if (!strncmp (flag->name, line->buffer.data+sdelta, n)) {
+				if (!strncmp (flag->name, line->buffer.data + sdelta, n)) {
 					tmp_argv[i++] = flag->name;
 					if (i == TMP_ARGV_SZ - 1) {
 						break;
@@ -1246,18 +1317,25 @@ static int is_string (const ut8 *buf, int size, int *len) {
 }
 
 static char *r_core_anal_hasrefs_to_depth(RCore *core, ut64 value, int depth);
-R_API char *r_core_anal_hasrefs(RCore *core, ut64 value) {
-	return r_core_anal_hasrefs_to_depth(core, value, r_config_get_i(core->config, "hex.depth"));
+R_API char *r_core_anal_hasrefs(RCore *core, ut64 value, bool verbose) {
+	if (verbose) {
+		return r_core_anal_hasrefs_to_depth(core, value, r_config_get_i (core->config, "hex.depth"));
+	}
+	RFlagItem *fi = r_flag_get_i (core->flags, value);
+	if (fi) {
+		return strdup (fi->name);
+	}
+	return NULL;
 }
 
 static char *r_core_anal_hasrefs_to_depth(RCore *core, ut64 value, int depth) {
 	RStrBuf *s = r_strbuf_new (NULL);
 	ut64 type;
+	SdbList *secs;
 	RIOSection *sect;
 	char *mapname;
 	RAnalFunction *fcn;
-	RFlagItem *fi;
-	fi = r_flag_get_i (core->flags, value);
+	RFlagItem *fi = r_flag_get_i (core->flags, value);
 	type = r_core_anal_address (core, value);
 	fcn = r_anal_get_fcn_in (core->anal, value, 0);
 	if (value && value != UT64_MAX) {
@@ -1270,7 +1348,9 @@ static char *r_core_anal_hasrefs_to_depth(RCore *core, ut64 value, int depth) {
 	} else {
 		mapname = NULL;
 	}
-	sect = value? r_io_section_vget (core->io, value): NULL;
+	secs = value? r_io_section_vget_secs_at (core->io, value): NULL;
+	sect = secs ? ls_pop (secs): NULL;
+	ls_free (secs);
 	if(! ((type&R_ANAL_ADDR_TYPE_HEAP)||(type&R_ANAL_ADDR_TYPE_STACK)) ) {
 		// Do not repeat "stack" or "heap" words unnecessarily.
 		if (sect && sect->name[0]) {
@@ -1284,7 +1364,7 @@ static char *r_core_anal_hasrefs_to_depth(RCore *core, ut64 value, int depth) {
 	if (fi) r_strbuf_appendf (s, " %s", fi->name);
 	if (fcn) r_strbuf_appendf (s, " %s", fcn->name);
 	if (type) {
-		const char *c = r_core_anal_optype_colorfor (core, value);
+		const char *c = r_core_anal_optype_colorfor (core, value, true);
 		const char *cend = (c && *c) ? Color_RESET: "";
 		if (!c) c = "";
 		if (type & R_ANAL_ADDR_TYPE_HEAP) {
@@ -1341,7 +1421,8 @@ static char *r_core_anal_hasrefs_to_depth(RCore *core, ut64 value, int depth) {
 		const char *c = core->cons->pal.ai_ascii;
 		const char *cend = Color_RESET;
 		int len, r;
-		r = r_io_read_at (core->io, value, buf, sizeof(buf));
+		r = r_io_read_at (core->io, value, buf, sizeof (buf));
+		buf[sizeof (buf) - 1] = 0;
 		if (r) {
 			switch (is_string (buf, sizeof(buf), &len)) {
 			case 1:
@@ -1380,10 +1461,18 @@ static char *r_core_anal_hasrefs_to_depth(RCore *core, ut64 value, int depth) {
 	return r_strbuf_drain (s);
 }
 
-R_API const char *r_core_anal_optype_colorfor(RCore *core, ut64 addr) {
+R_API char *r_core_anal_get_comments(RCore *core, ut64 addr) {
+	if (core) {
+		return r_meta_get_string (core->anal, R_META_TYPE_COMMENT, addr);
+	}
+	return NULL;
+}
+
+R_API const char *r_core_anal_optype_colorfor(RCore *core, ut64 addr, bool verbose) {
 	ut64 type;
-	if (!(core->print->flags & R_PRINT_FLAGS_COLOR))
+	if (!(core->print->flags & R_PRINT_FLAGS_COLOR)) {
 		return NULL;
+	}
 	type = r_core_anal_address (core, addr);
 	if (type & R_ANAL_ADDR_TYPE_EXEC)
 		return core->cons->pal.ai_exec; //Color_RED;
@@ -1408,9 +1497,13 @@ static void r_core_setenv (RCore *core) {
 	free (e);
 }
 
+static int mywrite(const ut8 *buf, int len) {
+	return r_cons_memcat ((const char *)buf, len);
+}
+
 R_API int r_core_init(RCore *core) {
 	core->blocksize = R_CORE_BLOCKSIZE;
-	core->block = (ut8*)malloc (R_CORE_BLOCKSIZE+1);
+	core->block = (ut8*)calloc (R_CORE_BLOCKSIZE + 1, 1);
 	if (!core->block) {
 		eprintf ("Cannot allocate %d bytes\n", R_CORE_BLOCKSIZE);
 		/* XXX memory leak */
@@ -1420,6 +1513,9 @@ R_API int r_core_init(RCore *core) {
 	core->cmd_depth = R_CORE_CMD_DEPTH + 1;
 	core->sdb = sdb_new (NULL, "r2kv.sdb", 0); // XXX: path must be in home?
 	core->lastsearch = NULL;
+	core->cmdfilter = NULL;
+	core->switch_file_view = 0;
+	core->cmdremote = 0;
 	core->incomment = false;
 	core->config = NULL;
 	core->http_up = false;
@@ -1428,11 +1524,13 @@ R_API int r_core_init(RCore *core) {
 	core->print->get_enumname = getenumname;
 	core->print->get_bitfield = getbitfield;
 	core->print->offname = r_core_print_offname;
-	core->print->cb_printf = (void *)r_cons_printf;
-	core->print->write = (void *)r_cons_memcat;
+	core->print->cb_printf = r_cons_printf;
+	core->print->write = mywrite;
 	core->print->disasm = __disasm;
 	core->print->colorfor = (RPrintColorFor)r_core_anal_optype_colorfor;
 	core->print->hasrefs = (RPrintColorFor)r_core_anal_hasrefs;
+	core->print->get_comments = (RPrintCommentCallback) r_core_anal_get_comments;
+	core->print->use_comments = false;
 	core->rtr_n = 0;
 	core->blocksize_max = R_CORE_BLOCKSIZE_MAX;
 	core->tasks = r_list_new ();
@@ -1509,7 +1607,7 @@ R_API int r_core_init(RCore *core) {
 	core->io->user = (void *)core;
 	core->io->cb_core_cmd = core_cmd_callback;
 	core->io->cb_core_cmdstr = core_cmdstr_callback;
-	core->sign = r_sign_new ();
+	core->io->cb_core_post_write = core_post_write_callback;
 	core->search = r_search_new (R_SEARCH_KEYWORD);
 	r_io_undo_enable (core->io, 1, 0); // TODO: configurable via eval
 	core->fs = r_fs_new ();
@@ -1539,19 +1637,16 @@ R_API int r_core_init(RCore *core) {
 	r_core_bind (core, &(core->anal->coreb));
 
 	core->file = NULL;
-	core->files = r_list_new ();
-	core->files->free = (RListFree)r_core_file_free;
+	core->files = r_list_newf ((RListFree)r_core_file_free);
 	core->offset = 0LL;
 	r_core_cmd_init (core);
 	core->dbg = r_debug_new (true);
 	r_core_bind (core, &core->dbg->corebind);
-	core->dbg->cb_printf = (PrintfCallback)r_cons_printf;
 	core->dbg->anal = core->anal; // XXX: dupped instance.. can cause lost pointerz
 	//r_debug_use (core->dbg, "native");
 // XXX pushing unititialized regstate results in trashed reg values
 //	r_reg_arena_push (core->dbg->reg); // create a 2 level register state stack
 //	core->dbg->anal->reg = core->anal->reg; // XXX: dupped instance.. can cause lost pointerz
-	core->sign->cb_printf = r_cons_printf;
 	core->io->cb_printf = r_cons_printf;
 	core->dbg->cb_printf = r_cons_printf;
 	core->dbg->bp->cb_printf = r_cons_printf;
@@ -1616,7 +1711,6 @@ R_API RCore *r_core_fini(RCore *c) {
 	r_cons_free ();
 	r_cons_singleton()->teefile = NULL; // HACK
 	r_search_free (c->search);
-	r_sign_free (c->sign);
 	r_flag_free (c->flags);
 	r_fs_free (c->fs);
 	r_egg_free (c->egg);
@@ -1679,10 +1773,11 @@ static int prompt_flag (RCore *r, char *s, size_t maxlen) {
 }
 
 static void prompt_sec(RCore *r, char *s, size_t maxlen) {
-	const RIOSection *sec = r_io_section_vget (r->io, r->offset);
-	if (!sec) {
-		return;
-	}
+	SdbList * secs = r_io_section_vget_secs_at (r->io, r->offset);
+	RIOSection *sec = secs ? ls_pop (secs) : NULL;
+	if (!sec) return;
+	ls_free (secs);
+
 	snprintf (s, maxlen, "%s:", sec->name);
 }
 
@@ -1917,8 +2012,12 @@ R_API int r_core_serve(RCore *core, RIODesc *file) {
 
 	r_cons_break_push (rap_break, rior);
 reaccept:
+#warning check this
+#if 0
 	core->io->plugin = NULL;
 	while (!r_cons_is_breaked ()) {
+#endif
+	while (!core->cons->breaked) {
 		c = r_socket_accept (fd);
 		if (!c) {
 			break;
@@ -1965,7 +2064,7 @@ reaccept:
 					if (file) {
 						r_core_bin_load (core, NULL, baddr);
 						file->map = r_io_map_add (core->io, file->desc->fd,
-								perm, 0, 0, r_io_desc_size (core->io, file->desc));
+								perm, 0, 0, r_io_desc_size (file->desc));
 						if (core->file && core->file->desc) {
 							pipefd = core->file->desc->fd;
 						} else {
@@ -2078,7 +2177,7 @@ reaccept:
 				}
 #endif
 				bufw = malloc (cmd_len + 5);
-				bufw[0] = RMT_CMD | RMT_REPLY;
+				bufw[0] = (ut8) (RMT_CMD | RMT_REPLY);
 				r_write_be32 (bufw + 1, cmd_len);
 				memcpy (bufw + 5, cmd_output, cmd_len);
 				r_socket_write (c, bufw, cmd_len+5);
@@ -2105,7 +2204,7 @@ reaccept:
 				x = r_read_at_be64 (buf, 1);
 				if (buf[0] == 2) {
 					if (core->file) {
-						x = r_io_desc_size (core->io, core->file->desc);
+						x = r_io_desc_size (core->file->desc);
 					} else {
 						x = 0;
 					}
@@ -2247,7 +2346,7 @@ R_API RBuffer *r_core_syscallf (RCore *core, const char *name, const char *fmt, 
 R_API RBuffer *r_core_syscall (RCore *core, const char *name, const char *args) {
 	RBuffer *b = NULL;
 	char code[1024];
-	int i, num;
+	int num;
 
 	num = r_syscall_get_num (core->anal->syscall, name);
 	if (!num) {
@@ -2269,12 +2368,14 @@ R_API RBuffer *r_core_syscall (RCore *core, const char *name, const char *args) 
 		eprintf ("r_egg_assemble: invalid assembly\n");
 	}
 	if ((b = r_egg_get_bin (core->egg))) {
+#if 0
 		if (b->length > 0) {
 			for (i = 0; i < b->length; i++) {
 				r_cons_printf ("%02x", b->buf[i]);
 			}
 			r_cons_printf ("\n");
 		}
+#endif
 	}
 	return b;
 }

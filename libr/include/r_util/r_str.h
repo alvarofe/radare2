@@ -1,16 +1,9 @@
 #ifndef R_STR_H
 #define R_STR_H
 
-typedef int (*RStrRangeCallback) (void *, int);
+#include "r_str_util.h"
 
-/* TODO ..use as uppercase maybe? they are macros! */
-#define strnull(x) (!x||!*x)
-#define iswhitechar(x) ((x)==' '||(x)=='\t'||(x)=='\n'||(x)=='\r')
-#define iswhitespace(x) ((x)==' '||(x)=='\t')
-#define isseparator(x) ((x)==' '||(x)=='\t'||(x)=='\n'||(x)=='\r'||(x)==' '|| \
-		(x)==','||(x)==';'||(x)==':'||(x)=='['||(x)==']'|| \
-		(x)=='('||(x)==')'||(x)=='{'||(x)=='}')
-#define ishexchar(x) ((x>='0'&&x<='9') ||  (x>='a'&&x<='f') ||  (x>='A'&&x<='F'))
+typedef int (*RStrRangeCallback) (void *, int);
 
 static inline void r_str_rmch(char *s, char ch) {
 	for (;*s; s++) {
@@ -50,6 +43,7 @@ R_API char **r_str_argv(const char *str, int *_argc);
 R_API void r_str_argv_free(char **argv);
 R_API char *r_str_new(const char *str);
 R_API int r_str_is_printable(const char *str);
+R_API bool r_str_is_printable_incl_newlines(const char *str);
 R_API char *r_str_concatlen(char *ptr, const char *string, int slen);
 R_API char *r_str_newf(const char *fmt, ...);
 R_API char *r_str_newlen(const char *str, int len);
@@ -75,7 +69,7 @@ R_API char *r_str_trim_head_tail(char *str);
 R_API ut32 r_str_hash(const char *str);
 R_API ut64 r_str_hash64(const char *str);
 R_API char *r_str_clean(char *str);
-R_API int r_str_nstr(char *from, char *to, int size);
+R_API const char *r_str_nstr(const char *from, const char *to, int size);
 R_API const char *r_str_lchr(const char *str, char chr);
 R_API const char *r_sub_str_lchr(const char *str, int start, int end, char chr);
 R_API const char *r_sub_str_rchr(const char *str, int start, int end, char chr);
@@ -97,7 +91,7 @@ typedef void(*str_operation)(char *c);
 
 R_API int r_str_do_until_token(str_operation op, char *str, const char tok);
 
-R_API void r_str_const_free();
+R_API void r_str_const_free(void);
 R_API const char *r_str_const(const char *ptr);
 
 R_API int r_str_re_match(const char *str, const char *reg);

@@ -4,7 +4,6 @@
 #include <r_types.h>
 #include <r_util.h>
 #include <r_list.h>
-#include <r_db.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,7 +34,6 @@ typedef struct r_flag_zone_item_t {
 typedef struct r_flag_item_t {
 	char *name;     /* unique name, escaped to avoid issues with r2 shell */
 	char *realname; /* real name, without any escaping */
-	ut64 namehash;  /* hash of the name, to be used as the key of the hashtable */
 	ut64 offset;    /* offset flagged by this item */
 	ut64 size;      /* size of the flag item */
 	int space;      /* flag space this item belongs to */
@@ -50,8 +48,8 @@ typedef struct r_flag_t {
 	bool space_strict; /* when true returned flag items must belong to the selected space */
 	char *spaces[R_FLAG_SPACES_MAX]; /* array of flag spaces */
 	RNum *num;
-	RHashTable64 *ht_off; /* hashmap key=item name, value=RList of items */
-	RHashTable64 *ht_name; /* hashmap key=item name, value=RList of items */
+	SdbHash *ht_off; /* hashmap key=item name, value=RList of items */
+	SdbHash *ht_name; /* hashmap key=item name, value=RList of items */
 	RList *flags;   /* list of RFlagItem contained in the flag */
 	RList *spacestack;
 	PrintfCallback cb_printf;

@@ -247,10 +247,9 @@ beach:
 }
 
 
-static void _set_bits(RCore *core, ut64 addr, int *bits) {
+static void choose_bits_anal_hints(RCore *core, ut64 addr, int *bits) {
 	RAnalRange *range;
 	RListIter *iter;
-
 	r_list_foreach (core->anal->bits_ranges, iter, range) {
 		if (addr >= range->from && addr < range->to) {
 			*bits = range->bits;
@@ -260,88 +259,45 @@ static void _set_bits(RCore *core, ut64 addr, int *bits) {
 }
 
 
-R_API int r_core_seek_archbits(RCore *core, ut64 addr) {
-	static char *oldarch = NULL;
-	static int oldbits = 0;
-	bool flag = false;
+R_API void r_core_seek_archbits(RCore *core, ut64 addr) {
 	int bits = 0;
-	char *arch = (char *)r_io_section_get_archbits (core->io, addr, &bits);
+	const char *arch = r_io_section_get_archbits (core->io, addr, &bits);
 	if (!bits) {
-		_set_bits (core, addr, &bits);
+		//if we found bits related with anal hints pick it up
+		choose_bits_anal_hints (core, addr, &bits);
 	}
-	if (!arch) {
-		arch = strdup (r_config_get (core->config, "asm.arch"));
-		flag = true;
-	} else {
-		arch = strdup (arch);
+	if (bits) {
+		r_config_set_i (core->config, "asm.bits", bits);
 	}
-	if (arch && bits) {
-		if (bits != oldbits) {
-			r_config_set_i (core->config, "asm.bits", bits);
-			oldbits = bits;
-		}
-		if (!oldarch) {
-			RBinInfo *info = r_bin_get_info (core->bin);
-			if (info && info->arch) {
-				oldarch = strdup (info->arch);
-			} else {
-				oldarch = strdup (r_config_get (core->config, "asm.arch"));
-				oldbits = r_config_get_i (core->config, "asm.bits");
-			}
-			if (strcmp (arch, oldarch)) {
-				r_config_set (core->config, "asm.arch", arch);
-			}
-		}
-		free (arch);
-		return 1;
+	if (arch) {
+		r_config_set (core->config, "asm.arch", arch);
 	}
-	if (oldarch) {
-		if (!(flag && arch && oldarch && !strcmp (oldarch, arch))) {
-			r_config_set (core->config, "asm.arch", oldarch);
-		}
-		R_FREE (oldarch);
-	}
-	if (oldbits) {
-		r_config_set_i (core->config, "asm.bits", oldbits);
-	}
-	free (arch);
-	return 0;
 }
 
 R_API bool r_core_seek(RCore *core, ut64 addr, bool rb) {
-	RIOSection *newsection;
-	ut64 ret, old = core->offset;
+	ut64 old = core->offset;
+	ut64 ret;
 
 	core->offset = addr;
-	core->io->section = core->section; // HACK
+	/* XXX unnecesary call */
+	//r_io_use_fd (core->io, core->file->desc);
 	ret = r_io_seek (core->io, addr, R_IO_SEEK_SET);
-	newsection = core->io->section;
 
 	if (ret == UT64_MAX) {
-		if (!core->io->va)
+		if (!core->io->va) {
 			return false;
+		}
 	} else {
 		core->offset = addr;
 	}
 	if (rb) {
 		ret = r_core_block_read (core);
-		if (core->io->ff) {
-			if (ret < 1 || ret > core->blocksize)
-				memset (core->block, core->io->Oxff, core->blocksize);
-			else
-				memset (core->block+ret, core->io->Oxff, core->blocksize-ret);
-			ret = core->blocksize;
-			core->offset = addr;
-		} else {
-			if (ret < 1)
-				core->offset = old;
+		if (!ret) {
+			core->offset = old;
 		}
 	}
-	if (core->section != newsection) {
-		r_core_seek_archbits (core, core->offset);
-		core->section = newsection;
-	}
-	return (ret == -1)? false: true;
+	r_core_seek_archbits (core, core->offset);
+	return (ret==-1)? false: true;
 }
 
 R_API int r_core_seek_delta(RCore *core, st64 addr) {
@@ -369,13 +325,12 @@ R_API int r_core_seek_delta(RCore *core, st64 addr) {
 
 R_API int r_core_write_at(RCore *core, ut64 addr, const ut8 *buf, int size) {
 	int ret;
-	if (!core->io || !core->file || size < 1) {
+	if (!core->io || !core->file || !core->file->desc || size<1)
 		return false;
-	}
-	ret = r_io_use_desc (core->io, core->file->desc);
+	ret = r_io_use_desc (core->io, core->file->desc->fd);
 	if (ret != -1) {
 		ret = r_io_write_at (core->io, addr, buf, size);
-		if (addr >= core->offset && addr <= core->offset+core->blocksize) {
+		if (addr >= core->offset && addr <= core->offset + core->blocksize) {
 			r_core_block_read (core);
 		}
 	}
@@ -384,10 +339,9 @@ R_API int r_core_write_at(RCore *core, ut64 addr, const ut8 *buf, int size) {
 
 R_API int r_core_extend_at(RCore *core, ut64 addr, int size) {
 	int ret;
-	if (!core->io || !core->file || size<1)
+	if (!core->io || !core->file || !core->file->desc || size<1)
 		return false;
-	//ret = r_io_use_fd (core->io, core->file->desc->fd);
-	ret = r_io_use_desc (core->io, core->file->desc);
+	ret = r_io_use_desc (core->io, core->file->desc->fd);
 	if (ret != -1) {
 		ret = r_io_extend_at (core->io, addr, size);
 		if (addr >= core->offset && addr <= core->offset+core->blocksize)
@@ -402,8 +356,11 @@ R_API int r_core_shift_block(RCore *core, ut64 addr, ut64 b_size, st64 dist) {
 	ut8 * shift_buf = NULL;
 	int res = false;
 
+	if (!core->io || !core->file || !core->file->desc || b_size<1)
+		return false;
+	
 	if (b_size == 0 || b_size == (ut64) -1) {
-		res = r_io_use_desc (core->io, core->file->desc);
+		res = r_io_use_desc (core->io, core->file->desc->fd);
 		file_sz = r_io_size (core->io);
 		bstart = r_io_seek (core->io, addr, R_IO_SEEK_SET);
 		fend = r_io_seek (core->io, 0, R_IO_SEEK_END);
@@ -411,10 +368,8 @@ R_API int r_core_shift_block(RCore *core, ut64 addr, ut64 b_size, st64 dist) {
 		b_size = fend > bstart ? fend - bstart: 0;
 	}
 
-
-	if (!core->io || !core->file || b_size<1)
+	if (b_size < 1)
 		return false;
-
 
 	// XXX handling basic cases atm
 	shift_buf = malloc (b_size);
@@ -437,7 +392,7 @@ R_API int r_core_shift_block(RCore *core, ut64 addr, ut64 b_size, st64 dist) {
 	else if ( (addr) + dist > fend) {
 		res = false;
 	} else {
-		res = r_io_use_desc (core->io, core->file->desc);
+		res = r_io_use_desc (core->io, core->file->desc->fd);
 		r_io_read_at (core->io, addr, shift_buf, b_size);
 		r_io_write_at (core->io, addr+dist, shift_buf, b_size);
 		res = true;
@@ -453,8 +408,8 @@ static RCoreFile * r_core_file_set_first_valid(RCore *core) {
 	RCoreFile *file = NULL;
 
 	r_list_foreach (core->files, iter, file) {
-		if (file && file->desc) {
-			core->io->raised = file->desc->fd;
+		if (file && file->desc){
+			r_io_use_desc (core->io, file->desc->fd);
 			core->switch_file_view = 1;
 			break;
 		}
@@ -464,27 +419,25 @@ static RCoreFile * r_core_file_set_first_valid(RCore *core) {
 
 R_API int r_core_block_read(RCore *core) {
 	if (!core->file && !r_core_file_set_first_valid (core)) {
-		memset (core->block, core->io->Oxff, core->blocksize);
+		memset (core->block, 0xff, core->blocksize);		//io->Oxff
 		return -1;
 	}
 	if (core->file && core->switch_file_view) {
-		r_io_use_desc (core->io, core->file->desc);
-		r_core_bin_set_by_fd (core, core->file->desc->fd); //needed?
+		r_io_use_desc (core->io, core->file->desc->fd);
+		r_core_bin_set_by_fd (core, core->file->desc->fd);	//needed?
 		core->switch_file_view = 0;
-	} else	{
-		r_io_use_fd (core->io, core->io->raised); //possibly not needed
 	}
 	return r_io_read_at (core->io, core->offset, core->block, core->blocksize);
 }
 
 R_API int r_core_read_at(RCore *core, ut64 addr, ut8 *buf, int size) {
 	if (!core || !core->io || !core->file || !core->file->desc || size < 1) {
-		if (core && core->io && size > 0) {
-			memset (buf, core->io->Oxff, size);
+		if (core && core->io && size > 0) {			//wtf
+			memset (buf, 0xff, size);			//io->Oxff
 		}
 		return false;
 	}
-	r_io_use_desc (core->io, core->file->desc);
+	r_io_use_desc (core->io, core->file->desc->fd);
 	return r_io_read_at (core->io, addr, buf, size);
 }
 
@@ -494,5 +447,5 @@ R_API int r_core_is_valid_offset (RCore *core, ut64 offset) {
 		r_sys_backtrace ();
 		return R_FAIL;
 	}
-	return r_io_is_valid_offset (core->io, offset, 0);
+	return r_io_is_valid_real_offset (core->io, offset, 0);
 }

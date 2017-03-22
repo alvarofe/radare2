@@ -22,7 +22,9 @@
 #define _TCC_H
 
 #include "r_types.h"
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "config.h"
 
 #ifdef CONFIG_TCCBOOT
@@ -48,7 +50,7 @@
 #define TCC_ASSERT(ex)
 #endif
 
-#ifndef _WIN32
+#ifndef __WINDOWS__
 # include <unistd.h>
 # include <sys/time.h>
 # ifndef __HAIKU__
@@ -84,7 +86,7 @@
 #include "stab.h"
 #include "libtcc.h"
 
-#ifndef _WIN32
+#ifndef __WINDOWS__
 #include <inttypes.h>
 #else
 typedef unsigned char uint8_t;
@@ -748,7 +750,7 @@ enum tcc_token {
 
 #define TOK_UIDENT TOK_DEFINE
 
-#ifdef _WIN32
+#ifdef __WINDOWS__
 #define snprintf _snprintf
 #define vsnprintf _vsnprintf
 #ifndef __GNUC__
@@ -763,7 +765,7 @@ extern float strtof (const char *__nptr, char **__endptr);
 extern long double strtold (const char *__nptr, char **__endptr);
 #endif
 
-#ifdef _WIN32
+#ifdef __WINDOWS__
 #define IS_DIRSEP(c) (c == '/' || c == '\\')
 #define IS_ABSPATH(p) (IS_DIRSEP(p[0]) || (p[0] && p[1] == ':' && IS_DIRSEP(p[2])))
 #define PATHCMP stricmp

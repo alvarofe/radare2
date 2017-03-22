@@ -37,6 +37,18 @@ static int meta_count_for(void *user, int idx) {
 	return r_meta_space_count_for (anal, idx);
 }
 
+static void zign_unset_for(void *user, int idx) {
+	RSpaces *s = (RSpaces*)user;
+	RAnal *anal = (RAnal*)s->user;
+	r_sign_space_unset_for (anal, idx);
+}
+
+static int zign_count_for(void *user, int idx) {
+	RSpaces *s = (RSpaces*)user;
+	RAnal *anal = (RAnal*)s->user;
+	return r_sign_space_count_for (anal, idx);
+}
+
 R_API RAnal *r_anal_new() {
 	int i;
 	RAnal *anal = R_NEW0 (RAnal);
@@ -53,13 +65,15 @@ R_API RAnal *r_anal_new() {
 	anal->gp = 0LL;
 	anal->sdb = sdb_new0 ();
 	anal->opt.noncode = false; // do not analyze data by default
+	r_space_init (&anal->meta_spaces, "CS", meta_unset_for, meta_count_for, anal);
+	r_space_init (&anal->zign_spaces, "zs", zign_unset_for, zign_count_for, anal);
 	anal->sdb_fcns = sdb_ns (anal->sdb, "fcns", 1);
 	anal->sdb_meta = sdb_ns (anal->sdb, "meta", 1);
-	r_space_init (&anal->meta_spaces, meta_unset_for, meta_count_for, anal);
 	anal->sdb_hints = sdb_ns (anal->sdb, "hints", 1);
 	anal->sdb_xrefs = sdb_ns (anal->sdb, "xrefs", 1);
 	anal->sdb_types = sdb_ns (anal->sdb, "types", 1);
 	anal->sdb_cc = sdb_ns (anal->sdb, "cc", 1);
+	anal->sdb_zigns = sdb_ns (anal->sdb, "zigns", 1);
 	anal->cb_printf = (PrintfCallback) printf;
 	(void)r_anal_pin_init (anal);
 	(void)r_anal_xrefs_init (anal);
@@ -71,6 +85,7 @@ R_API RAnal *r_anal_new() {
 	r_flag_bind_init (anal->flb);
 	anal->reg = r_reg_new ();
 	anal->last_disasm_reg = NULL;
+	anal->stackptr = 0;
 	anal->bits_ranges = r_list_newf (free);
 	anal->lineswidth = 0;
 	anal->fcns = r_anal_fcn_list_new ();
@@ -106,6 +121,7 @@ R_API RAnal *r_anal_free(RAnal *a) {
 	a->fcns->free = r_anal_fcn_free;
 	r_list_free (a->fcns);
 	r_space_fini (&a->meta_spaces);
+	r_space_fini (&a->zign_spaces);
 	r_anal_pin_fini (a);
 	r_list_free (a->refs);
 	r_list_free (a->types);
@@ -149,6 +165,8 @@ R_API void r_anal_list(RAnal *anal) {
 R_API bool r_anal_use(RAnal *anal, const char *name) {
 	RListIter *it;
 	RAnalPlugin *h;
+
+	bool change = anal && anal->cur && strcmp (anal->cur->name, name);
 	r_list_foreach (anal->plugins, it, h) {
 		if (!strcmp (h->name, name)) {
 #if 0
@@ -159,7 +177,9 @@ R_API bool r_anal_use(RAnal *anal, const char *name) {
 #endif
 			anal->cur = h;
 			r_anal_set_reg_profile (anal);
-			r_anal_set_fcnsign (anal, NULL);
+			if (change) {
+				r_anal_set_fcnsign (anal, NULL);
+			}
 			if (anal->esil) {
 				r_anal_esil_free (anal->esil);
 				anal->esil = NULL;
@@ -308,6 +328,47 @@ R_API char *r_anal_strmask (RAnal *anal, const char *data) {
 	return ret;
 }
 
+R_API ut8 *r_anal_mask (RAnal *anal, int size, const ut8 *data) {
+	RAnalOp *op = NULL;
+	ut8 *ret = NULL;
+	int oplen, idx = 0;
+
+	if (!data) {
+		return NULL;
+	}
+
+	op = r_anal_op_new ();
+	ret = malloc (size);
+	memset (ret, 0xff, size);
+
+	while (idx < size) {
+		if ((oplen = r_anal_op (anal, op, 0, data + idx, size - idx)) < 1) {
+			break;
+		}
+		switch (op->type) {
+		case R_ANAL_OP_TYPE_CALL:
+		case R_ANAL_OP_TYPE_RCALL:
+		case R_ANAL_OP_TYPE_ICALL:
+		case R_ANAL_OP_TYPE_IRCALL:
+		case R_ANAL_OP_TYPE_UCALL:
+		case R_ANAL_OP_TYPE_CJMP:
+		case R_ANAL_OP_TYPE_JMP:
+		case R_ANAL_OP_TYPE_UJMP:
+		case R_ANAL_OP_TYPE_RJMP:
+		case R_ANAL_OP_TYPE_IJMP:
+		case R_ANAL_OP_TYPE_IRJMP:
+			if (op->nopcode != 0) {
+				memset (ret + idx + op->nopcode, 0, oplen - op->nopcode);
+			}
+		}
+		idx += oplen;
+	}
+
+	free (op);
+
+	return ret;
+}
+
 R_API void r_anal_trace_bb(RAnal *anal, ut64 addr) {
 	RAnalBlock *bbi;
 	RAnalFunction *fcni;
@@ -379,6 +440,7 @@ R_API int r_anal_purge (RAnal *anal) {
 	sdb_reset (anal->sdb_hints);
 	sdb_reset (anal->sdb_xrefs);
 	sdb_reset (anal->sdb_types);
+	sdb_reset (anal->sdb_zigns);
 	r_list_free (anal->fcns);
 	anal->fcns = r_anal_fcn_list_new ();
 #if USE_NEW_FCN_STORE
@@ -424,7 +486,7 @@ static int nonreturn_print(void *p, const char *k, const char *v) {
 	if (!strncmp (v, "func", strlen ("func") + 1)) {
 		const char *query = sdb_fmt (-1, "func.%s.noreturn", k);
 		if (sdb_bool_get (anal->sdb_types, query, NULL)) {
-			anal->cb_printf ("- %s\n", k);
+			anal->cb_printf ("%s\n", k);
 		}
 	}
 	if (!strncmp (k, "addr.", 5)) {
@@ -574,45 +636,45 @@ R_API bool r_anal_noreturn_at(RAnal *anal, ut64 addr) {
 	return false;
 }
 
-static int cmp_range(const void *a, const void *b) {
-	RAnalRange *ra = (RAnalRange *)a;
-	RAnalRange *rb = (RAnalRange *)b;
-	return (ra && rb)? ra->from > rb->from : 0;
-}
-
-static int build_range(void *p, const char *k, const char *v) {
-	RAnal *a = (RAnal *)p;
-	RList *list_range = a->bits_ranges;
-	RAnalHint *hint = r_anal_hint_from_string (a, sdb_atoi (k + 5), v);
-	if (hint->bits) {
-		RAnalRange *range = R_NEW0 (RAnalRange);
-		if (range) {
-			range->bits = hint->bits;
-			range->from = hint->addr;
-			r_list_append (list_range, range);
-		}
-	}
-	return 1;
-}
-
 // based on anal hint we construct a list of RAnalRange to handle
 // better arm/thumb though maybe handy in other contexts
 R_API void r_anal_build_range_on_hints(RAnal *a) {
-	RListIter *iter;
-	RAnalRange *range;
-	if (a->sdb_hints_changed) {
+	if (a->bits_hints_changed) {
+		SdbListIter *iter;
+		RListIter *it;
+		SdbKv *kv;
+		RAnalRange *range;
+		int range_bits = 0;
 		// construct again the range from hint to handle properly arm/thumb
 		r_list_free (a->bits_ranges);
-		a->bits_ranges = r_list_new ();
-		a->bits_ranges->free = free;
-		sdb_foreach (a->sdb_hints, build_range, a);
-		r_list_sort (a->bits_ranges, cmp_range);
-		r_list_foreach (a->bits_ranges, iter, range) {
-			if (iter->n && !range->to) {
-				range->to = ((RAnalRange *)(iter->n->data))->from;
+		a->bits_ranges = r_list_newf ((RListFree)free);
+		SdbList *sdb_range = sdb_foreach_list (a->sdb_hints, true);
+		//just grab when hint->bit changes with the previous one
+		ls_foreach (sdb_range, iter, kv) {
+			RAnalHint *hint = r_anal_hint_from_string (a, sdb_atoi (kv->key + 5), kv->value);
+			if (hint->bits && range_bits != hint->bits) {
+				RAnalRange *range = R_NEW0 (RAnalRange);
+				if (range) {
+					range->bits = hint->bits;
+					range->from = hint->addr;
+					range->to = UT64_MAX;
+					r_list_append (a->bits_ranges, range);
+				}
+			} else {
+				//remove this hint is not needed
+				r_anal_hint_unset_bits (a, hint->addr);
+			}
+			range_bits = hint->bits;
+			r_anal_hint_free (hint);
+		}
+		//close ranges addr
+		r_list_foreach (a->bits_ranges, it, range) {
+			if (it->n && it->n->data) {
+				range->to = ((RAnalRange *)(it->n->data))->from;
 			}
 		}
-		a->sdb_hints_changed = false;
+		ls_free (sdb_range);
+		a->bits_hints_changed = false;
 	}
 }
 

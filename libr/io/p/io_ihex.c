@@ -191,7 +191,6 @@ static int __close(RIODesc *fd) {
 	r_buf_free (rih->rbuf);
 	free (rih);
 	fd->data = NULL;
-	fd->state = R_IO_DESC_TYPE_CLOSED;
 	return 0;
 }
 
@@ -224,7 +223,8 @@ static bool ihex_parse(RBuffer *rbuf, char *str) {
 	//fugly macro to prevent an overflow of r_buf_write_at() len
 #define SEC_MAX (sec_size < INT_MAX)? sec_size: INT_MAX
 	ut32 sec_size = 0;
-	sec_tmp = calloc (1, UT16_MAX);
+	const int sec_count = UT16_MAX;
+	sec_tmp = calloc (1, sec_count);
 	if (!sec_tmp) {
 		goto fail;
 	}
@@ -269,7 +269,9 @@ static bool ihex_parse(RBuffer *rbuf, char *str) {
 					eprintf ("unparsable data !\n");
 					goto fail;
 				}
-				sec_tmp[sec_size + i] = (ut8) byte & 0xff;
+				if (sec_size + i < sec_count) {
+					sec_tmp[sec_size + i] = (ut8) byte & 0xff;
+				}
 				cksum += byte;
 			}
 			sec_size += bc;
@@ -379,8 +381,7 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 			free (str);
 			return NULL;
 		}
-		mal->fd = -1; /* causes r_io_desc_new() to set the correct fd */
-		mal->rbuf = r_buf_new_sparse ();
+		mal->rbuf = r_buf_new_sparse();
 		if (!mal->rbuf) {
 			free (str);
 			free (mal);
@@ -394,8 +395,8 @@ static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 			return NULL;
 		}
 		free (str);
-		return r_io_desc_new (&r_io_plugin_ihex,
-			mal->fd, pathname, rw, mode, mal);
+		return r_io_desc_new (io, &r_io_plugin_ihex,
+			pathname, rw, mode, mal);
 	}
 	return NULL;
 }

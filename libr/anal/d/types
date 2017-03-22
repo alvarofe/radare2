@@ -145,6 +145,11 @@ func.malloc.args=1
 func.malloc.arg.0=size_t,size
 func.malloc.ret= void *
 
+xmalloc=func
+func.xmalloc.args=1
+func.xmalloc.arg.0=size_t,size
+func.xmalloc.ret=void *
+
 realloc=func
 func.realloc.args=2
 func.realloc.arg.0=void,*ptr
@@ -208,13 +213,6 @@ sleep=func
 func.sleep.args=1
 func.sleep.arg.0=int,s
 func.sleep.ret=int
-
-err=func
-func.err.args=2
-func.err.arg.0=int,eval
-func.err.arg.1=const char *,fmt
-func.err.noreturn=true
-func.err.ret=void
 
 close=func
 func.close.args=1
@@ -2723,3 +2721,9 @@ mktemp=func
 func.mktemp.args=1
 func.mktemp.arg.0=char *,template
 func.mktemp.ret=char *
+
+objc_msgSend=func
+func.objc_msgSend.args=2
+func.objc_msgSend.arg.0=void *,instance
+func.objc_msgSend.arg.1=char *,selector
+func.objc_msgSend.ret=void *

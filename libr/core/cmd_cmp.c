@@ -368,7 +368,7 @@ static int cmd_cp(void *data, const char *input) {
 
 static int cmd_cmp(void *data, const char *input) {
 	static char *oldcwd = NULL;
-	int ret, i, mode = 0;
+	int ret = 0, i, mode = 0;
 	RCore *core = data;
 	ut64 val = UT64_MAX;
 	char * filled;
@@ -382,7 +382,15 @@ static int cmd_cmp(void *data, const char *input) {
 	case 'p':
 		return cmd_cp (data, input);
 		break;
-	case 'a': r_core_syscmd_cat (input+1); break;
+	case 'a':
+		if (input[1] == 't') {
+			char *res = r_syscmd_cat (input + 1);
+			if (res) {
+				r_cons_print (res);
+				free (res);
+			}
+		}
+		break;
 	case 'w': cmd_cmp_watcher (core, input+1); break;
 	case '*':
 		if (!input[2]) {
@@ -394,61 +402,66 @@ static int cmd_cmp(void *data, const char *input) {
 			strlen (input + 2) + 1, '*');
 		break;
 	case ' ':
-		val = radare_compare (core, core->block, (ut8*)input+1,
-			strlen (input + 1) + 1, 0);
+		{
+			char *str = strdup (input + 1);
+			int len = r_str_unescape (str);
+			val = radare_compare (core, core->block, (ut8*)str, len, 0);
+			free (str);
+		}
 		break;
 	case 'x':
-		switch (input[1])
-		{
-			case ' ':
-				mode = 0;
-				input += 2;
-				break;
-			case '*':
-				if (input[2] != ' ') {
-					eprintf ("Usage: cx* 00..22'\n");
-					return 0;
-				}
-
-				mode = '*';
-				input += 3;
-				break;
-			default:
-				eprintf ("Usage: cx 00..22'\n");
+		switch (input[1]) {
+		case ' ':
+			mode = 0;
+			input += 2;
+			break;
+		case '*':
+			if (input[2] != ' ') {
+				eprintf ("Usage: cx* 00..22'\n");
 				return 0;
+			}
+			mode = '*';
+			input += 3;
+			break;
+		default:
+			eprintf ("Usage: cx 00..22'\n");
+			return 0;
+		}
+		if (!(filled = (char*) malloc (strlen (input) + 1))) {
+			return false;
+		}
+		memcpy (filled, input, strlen (input) + 1);
+		if (!(buf = (ut8*)malloc (strlen (input) + 1))) {
+			free (filled);
+			return false;
+		}
+		ret = r_hex_bin2str (core->block, strlen (input) / 2, (char *)buf);
+		for (i = 0; i < ret * 2; i++) {
+			if (filled[i] == '.') {
+				filled[i] = buf[i];
+			}
 		}
 
-		filled = (char*) malloc (strlen (input) + 1);
-		if (!filled)
-			return false;
-
-		memcpy (filled, input, strlen (input) + 1);
-
-		buf = (ut8*)malloc (strlen (input) + 1);
-		if (!buf)
-			return false;
-
-		ret = r_hex_bin2str (core->block, strlen (input) / 2, (char *)buf);
-
-		for (i = 0; i < ret * 2; i++)
-			if (filled[i] == '.')
-				filled[i] = buf[i];
-
 		ret = r_hex_str2bin (filled, buf);
-		if (ret<1) eprintf ("Cannot parse hexpair\n");
-		else val = radare_compare (core, core->block, buf, ret, mode);
+		if (ret < 1) {
+			eprintf ("Cannot parse hexpair\n");
+		} else {
+			val = radare_compare (core, core->block, buf, ret, mode);
+		}
 		free (buf);
 		free (filled);
 		break;
 	case 'X':
 		buf = malloc (core->blocksize);
 		if (buf) {
-			ret = r_io_read_at (core->io, r_num_math (core->num,
-				input+1), buf, core->blocksize);
-			if (ret<1) eprintf ("Cannot read hexdump\n");
+			if (!r_io_read_at (core->io, r_num_math (core->num,
+							  input+1), buf, core->blocksize)) {
+				eprintf ("Cannot read hexdump\n");
+			}
 			val = radare_compare (core, core->block, buf, ret, mode);
 			free (buf);
-		} return false;
+		} 
+		return false;
 		break;
 	case 'f':
 		if (input[1]!=' ') {
@@ -510,8 +523,9 @@ static int cmd_cmp(void *data, const char *input) {
 			}
 		} else {
 			char* home = r_sys_getenv (R_SYS_HOME);
-			if (!home || r_sandbox_chdir (home)==-1)
+			if (!home || r_sandbox_chdir (home) == -1) {
 				eprintf ("Cannot find home.\n");
+			}
 			free (home);
 		}
 		break;

@@ -21,7 +21,7 @@ static RCons r_cons_instance;
 //this structure goes into cons_stack when r_cons_push/pop
 typedef struct {
 	char *buf;
-	int buf_len;	
+	int buf_len;
 	int buf_size;
 	RConsGrep *grep;
 } RConsStack;
@@ -29,7 +29,7 @@ typedef struct {
 typedef struct {
 	bool breaked;
 	void *data;
-	RConsEvent event_interrupt;	
+	RConsEvent event_interrupt;
 } RConsBreakStack;
 
 static void break_stack_free(void *ptr) {
@@ -149,7 +149,7 @@ R_API void r_cons_println(const char* str) {
 	r_cons_newline ();
 }
 
-R_API void r_cons_strcat_justify (const char *str, int j, char c) {
+R_API void r_cons_strcat_justify(const char *str, int j, char c) {
 	int i, o, len;
 	for (o = i = len = 0; str[i]; i++, len++) {
 		if (str[i]=='\n') {
@@ -167,7 +167,7 @@ R_API void r_cons_strcat_justify (const char *str, int j, char c) {
 		}
 	}
 	if (len > 1) {
-		r_cons_memcat (str+o, len);
+		r_cons_memcat (str + o, len);
 	}
 }
 
@@ -203,7 +203,7 @@ R_API void r_cons_break_push(RConsBreak cb, void *user) {
 R_API void r_cons_break_pop() {
 	//restore old state
 	if (I.break_stack) {
-		RConsBreakStack *b = NULL; 
+		RConsBreakStack *b = NULL;
 		r_print_set_interrupted (I.breaked);
 		b = r_stack_pop (I.break_stack);
 		if (b) {
@@ -215,7 +215,7 @@ R_API void r_cons_break_pop() {
 #if __UNIX__ || __CYGWIN__
 			signal (SIGINT, SIG_IGN);
 #endif
-			I.breaked = false;	
+			I.breaked = false;
 		}
 	}
 }
@@ -296,7 +296,7 @@ static void r_cons_pal_null() {
 	int i;
 	RCons *cons = r_cons_singleton ();
 	for (i = 0; i < R_CONS_PALETTE_LIST_SIZE; i++){
-		cons->pal.list[i] = NULL;	
+		cons->pal.list[i] = NULL;
 	}
 }
 
@@ -310,6 +310,7 @@ R_API RCons *r_cons_new() {
 	I.event_interrupt = NULL;
 	I.is_wine = -1;
 	I.fps = 0;
+	I.use_color = false;
 	I.blankline = true;
 	I.teefile = NULL;
 	I.fix_columns = 0;
@@ -381,7 +382,8 @@ R_API RCons *r_cons_free() {
 		free (I.buffer);
 		I.buffer = NULL;
 	}
-	r_stack_free (I.cons_stack);	
+	R_FREE (I.break_word);
+	r_stack_free (I.cons_stack);
 	r_stack_free (I.break_stack);
 	return NULL;
 }
@@ -509,14 +511,13 @@ R_API const char *r_cons_get_buffer() {
 }
 
 R_API void r_cons_filter() {
-	/* grep*/
+	/* grep */
 	if (I.grep.nstrings > 0 || I.grep.tokens_used || I.grep.less || I.grep.json) {
 		r_cons_grepbuf (I.buffer, I.buffer_len);
 	}
 	/* html */
 	/* TODO */
 }
-
 
 R_API void r_cons_push() {
 	if (I.cons_stack) {
@@ -554,7 +555,7 @@ R_API void r_cons_pop() {
 		if (!data->buf) {
 			free (data);
 			return;
-		} 
+		}
 		tmp = malloc (data->buf_size);
 		if (!tmp) {
 			cons_stack_free ((void *)data);
@@ -776,29 +777,43 @@ R_API void r_cons_visual_write (char *buffer) {
 	}
 }
 
-R_API void r_cons_printf(const char *format, ...) {
+R_API void r_cons_printf_list(const char *format, va_list ap) {
 	size_t size, written;
-	va_list ap;
+	va_list ap2;
 
+	va_copy (ap2, ap);
 	if (I.null || !format) {
+		va_end (ap2);
 		return;
 	}
 	if (strchr (format, '%')) {
 		palloc (MOAR + strlen (format) * 20);
+club:
 		size = I.buffer_sz - I.buffer_len - 1; /* remaining space in I.buffer */
-		va_start (ap, format);
 		written = vsnprintf (I.buffer + I.buffer_len, size, format, ap);
-		va_end (ap);
 		if (written >= size) { /* not all bytes were written */
 			palloc (written);
-			va_start (ap, format);
-			written = vsnprintf (I.buffer + I.buffer_len, written, format, ap);
-			va_end (ap);
+			va_copy (ap, ap2);
+			va_copy (ap2, ap);
+			written = vsnprintf (I.buffer + I.buffer_len, written, format, ap2);
+			if (written >= size) {
+				palloc (written);
+				goto club;
+			}
+			va_end (ap2);
 		}
 		I.buffer_len += written;
 	} else {
 		r_cons_strcat (format);
 	}
+	va_end (ap2);
+}
+
+R_API void r_cons_printf(const char *format, ...) {
+	va_list ap;
+	va_start (ap, format);
+	r_cons_printf_list (format, ap);
+	va_end (ap);
 }
 
 R_API int r_cons_get_column() {
@@ -811,9 +826,9 @@ R_API int r_cons_get_column() {
 }
 
 /* final entrypoint for adding stuff in the buffer screen */
-R_API void r_cons_memcat(const char *str, int len) {
+R_API int r_cons_memcat(const char *str, int len) {
 	if (len < 0 || (I.buffer_len + len) < 0) {
-		return;
+		return -1;
 	}
 	if (I.echo) {
 		write (2, str, len);
@@ -828,13 +843,20 @@ R_API void r_cons_memcat(const char *str, int len) {
 	if (I.flush) {
 		r_cons_flush ();
 	}
+	if (I.break_word && str) {
+		if (r_mem_mem ((const ut8*)str, len, (const ut8*)I.break_word, I.break_word_len)) {
+			I.breaked = true;
+		}
+	}
+	return len;
 }
 
 R_API void r_cons_memset(char ch, int len) {
 	if (!I.null && len > 0) {
 		palloc (len + 1);
-		memset (I.buffer + I.buffer_len, ch, len + 1);
+		memset (I.buffer + I.buffer_len, ch, len);
 		I.buffer_len += len;
+		I.buffer[I.buffer_len] = 0;
 	}
 }
 
@@ -853,6 +875,13 @@ R_API void r_cons_newline() {
 	if (!I.null) {
 		r_cons_strcat ("\n");
 	}
+// This place is wrong to manage the color reset, can interfire with r2pipe output sending resetchars
+//  and break json output appending extra chars.
+// this code now is managed into output.c:118 at function r_cons_w32_print
+// now the console color is reset with each \n (same stuff do it here but in correct place ... i think)
+//#if __WINDOWS__
+	//r_cons_reset_colors();
+//#endif
 	//if (I.is_html) r_cons_strcat ("<br />\n");
 }
 
@@ -1176,14 +1205,18 @@ R_API void r_cons_highlight (const char *word) {
 	}
 }
 
-R_API char *r_cons_lastline () {
-	char *b = I.buffer+I.buffer_len;
-	while (b >I.buffer) {
+R_API char *r_cons_lastline (int *len) {
+	char *b = I.buffer + I.buffer_len;
+	while (b > I.buffer) {
 		if (*b == '\n') {
 			b++;
 			break;
 		}
 		b--;
+	}
+	if (len) {
+		int delta = b - I.buffer;
+		*len = I.buffer_len - delta;
 	}
 	return b;
 }
@@ -1248,3 +1281,13 @@ R_API const char* r_cons_get_rune(const ut8 ch) {
 	return NULL;
 }
 
+R_API void r_cons_breakword(const char *s) {
+	free (I.break_word);
+	if (s) {
+		I.break_word = strdup (s);
+		I.break_word_len = strlen (s);
+	} else {
+		I.break_word = NULL;
+		I.break_word_len = 0;
+	}
+}

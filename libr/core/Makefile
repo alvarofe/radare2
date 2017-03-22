@@ -7,11 +7,11 @@ DEPS+=r_debug r_hash r_bin r_lang r_io r_anal r_parse r_bp r_egg
 DEPS+=r_reg r_search r_syscall r_socket r_fs r_magic r_crypto
 
 OBJS=core.o cmd.o file.o cconfig.o visual.o cio.o yank.o libs.o graph.o
-OBJS+=hack.o vasm.o patch.o cbin.o log.o syscmd.o rtr.o cmd_api.o
-OBJS+=anal.o project.o gdiff.o asm.o vmenus.o disasm.o plugin.o
-OBJS+=help.o task.o panels.o pseudo.o vmarks.o anal_tp.o
+OBJS+=hack.o vasm.o patch.o cbin.o log.o rtr.o cmd_api.o
+OBJS+=canal.o project.o gdiff.o asm.o vmenus.o disasm.o plugin.o
+OBJS+=help.o task.o panels.o pseudo.o vmarks.o anal_tp.o blaze.o
 
-CFLAGS+=-DCORELIB
+CFLAGS+=-DCORELIB -I../../shlr
 LDFLAGS+=${DL_LIBS}
 
 ifeq ($(shell uname),OpenBSD)

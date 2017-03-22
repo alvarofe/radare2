@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2016 - pancake */
+/* radare - LGPL - Copyright 2009-2017 - pancake */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -9,8 +9,6 @@
 
 extern RBinWrite r_bin_write_mach0;
 
-static int check(RBinFile *arch);
-static int check_bytes(const ut8 *buf, ut64 length);
 static RBinInfo* info(RBinFile *arch);
 
 static Sdb* get_sdb (RBinObject *o) {
@@ -39,9 +37,9 @@ static void * load_bytes(RBinFile *arch, const ut8 *buf, ut64 sz, ut64 loadaddr,
 	if (!buf || !sz || sz == UT64_MAX) {
 		return NULL;
 	}
-	tbuf = r_buf_new();
+	tbuf = r_buf_new ();
 	r_buf_set_bytes (tbuf, buf, sz);
-	res = MACH0_(new_buf) (tbuf);
+	res = MACH0_(new_buf) (tbuf, arch->rbin->verbose);
 	if (res) {
 		sdb_ns_set (sdb, "info", res->kv);
 	}
@@ -58,7 +56,6 @@ static int load(RBinFile *arch) {
 		return false;
 	}
 	res = load_bytes (arch, bytes, sz, arch->o->loadaddr, arch->sdb);
-
 	if (!arch->o || !res) {
 		MACH0_(mach0_free) (res);
 		return false;
@@ -123,7 +120,6 @@ static void handle_data_sections(RBinSection *sect) {
 		sect->is_data = true;
 	} else if (strstr (sect->name, "_objc_classname")) {
 		sect->is_data = true;
-		return;
 	} else if (strstr (sect->name, "_objc_methtype")) {
 		sect->is_data = true;
 	}
@@ -173,6 +169,20 @@ static RList* sections(RBinFile *arch) {
 	return ret;
 }
 
+
+static void _handle_arm_thumb(struct MACH0_(obj_t) *bin, RBinSymbol **p) {
+	RBinSymbol *ptr = *p;
+	ptr->bits = 32;
+	if (bin) {
+		if (ptr->paddr & 1) {
+			ptr->paddr--;
+			ptr->vaddr--;
+			ptr->bits = 16;
+		}
+	}
+
+}
+
 static RList* symbols(RBinFile *arch) {
 	struct MACH0_(obj_t) *bin;
 	int i;
@@ -181,7 +191,7 @@ static RList* symbols(RBinFile *arch) {
 	RBinObject *obj = arch ? arch->o : NULL;
 	RList *ret = r_list_newf (free);
 	const char *lang = "c";
-	int wordsize = 16;
+	int wordsize = 0;
 	if (!ret) {
 		return NULL;
 	}
@@ -190,7 +200,6 @@ static RList* symbols(RBinFile *arch) {
 		return NULL;
 	}
 	wordsize = MACH0_(get_bits) (obj->bin_obj);
-
 	if (!(symbols = MACH0_(get_symbols) (obj->bin_obj))) {
 		return ret;
 	}
@@ -210,12 +219,8 @@ static RList* symbols(RBinFile *arch) {
 		ptr->vaddr = symbols[i].addr;
 		ptr->paddr = symbols[i].offset + obj->boffset;
 		ptr->size = symbols[i].size;
-		ptr->bits = wordsize;
-		if (wordsize == 16) {
-			// if thumb, hint non-thumb symbols
-			if (!(ptr->paddr & 1)) {
-				ptr->bits = 32;
-			}
+		if (bin->hdr.cputype == CPU_TYPE_ARM && wordsize < 64) {
+			_handle_arm_thumb (bin, &ptr);
 		}
 		ptr->ordinal = i;
 		bin->dbg_info = strncmp (ptr->name, "radr://", 7)? 0: 1;
@@ -244,6 +249,9 @@ static RList* symbols(RBinFile *arch) {
 			ptr->forwarder = r_str_const ("NONE");
 			ptr->bind = r_str_const ("LOCAL");
 			ptr->ordinal = i++;
+			if (bin->hdr.cputype == CPU_TYPE_ARM && wordsize < 64) {
+				_handle_arm_thumb (bin, &ptr);
+			}
 			r_list_append (ret, ptr);
 		}
 	}
@@ -319,22 +327,28 @@ static RList* relocs(RBinFile *arch) {
 	if (arch && arch->o) {
 		bin = arch->o->bin_obj;
 	}
-	if (!obj || !obj->bin_obj || !(ret = r_list_newf (free)))
+	if (!obj || !obj->bin_obj || !(ret = r_list_newf (free))) {
 		return NULL;
+	}
 	ret->free = free;
-	if (!(relocs = MACH0_(get_relocs) (arch->o->bin_obj)))
+	if (!(relocs = MACH0_(get_relocs) (arch->o->bin_obj))) {
 		return ret;
+	}
 	for (i = 0; !relocs[i].last; i++) {
 		// TODO(eddyb) filter these out earlier.
-		if (!relocs[i].addr)
+		if (!relocs[i].addr) {
 			continue;
-		if (!(ptr = R_NEW0 (RBinReloc)))
+		}
+		if (!(ptr = R_NEW0 (RBinReloc))) {
 			break;
+		}
 		ptr->type = relocs[i].type;
 		ptr->additive = 0;
-		if (bin->imports_by_ord && relocs[i].ord < bin->imports_by_ord_size)
+		if (bin->imports_by_ord && relocs[i].ord < bin->imports_by_ord_size) {
 			ptr->import = bin->imports_by_ord[relocs[i].ord];
-		else ptr->import = NULL;
+		} else {
+			ptr->import = NULL;
+		}
 		ptr->addend = relocs[i].addend;
 		ptr->vaddr = relocs[i].addr;
 		ptr->paddr = relocs[i].offset;
@@ -351,9 +365,9 @@ static RList* libs(RBinFile *arch) {
 	RList *ret = NULL;
 	RBinObject *obj = arch ? arch->o : NULL;
 
-	if (!obj || !obj->bin_obj || !(ret = r_list_newf (free)))
+	if (!obj || !obj->bin_obj || !(ret = r_list_newf (free))) {
 		return NULL;
-
+	}
 	if ((libs = MACH0_(get_libs) (obj->bin_obj))) {
 		for (i = 0; !libs[i].last; i++) {
 			ptr = strdup (libs[i].name);
@@ -403,23 +417,24 @@ static RBinInfo* info(RBinFile *arch) {
 	}
 	ret->has_va = true;
 	ret->has_pi = MACH0_(is_pie) (arch->o->bin_obj);
+	ret->has_nx = MACH0_(has_nx) (arch->o->bin_obj);
 	return ret;
 }
 
 #if !R_BIN_MACH064
-static int check(RBinFile *arch) {
-	const ut8 *bytes = arch ? r_buf_buffer (arch->buf) : NULL;
-	ut64 sz = arch ? r_buf_size (arch->buf): 0;
-	return check_bytes (bytes, sz);
-}
-
-static int check_bytes(const ut8 *buf, ut64 length) {
+static bool check_bytes(const ut8 *buf, ut64 length) {
 	if (buf && length >= 4) {
 		if (!memcmp (buf, "\xce\xfa\xed\xfe", 4) ||
 			!memcmp (buf, "\xfe\xed\xfa\xce", 4))
 			return true;
 	}
 	return false;
+}
+
+static bool check(RBinFile *arch) {
+	const ut8 *bytes = arch ? r_buf_buffer (arch->buf) : NULL;
+	ut64 sz = arch ? r_buf_size (arch->buf): 0;
+	return check_bytes (bytes, sz);
 }
 
 #if 0
@@ -728,9 +743,8 @@ static ut64 size(RBinFile *arch) {
 			}
 		}
 	}
-	return off+len;
+	return off + len;
 }
-
 
 RBinPlugin r_bin_plugin_mach0 = {
 	.name = "mach0",
@@ -751,6 +765,8 @@ RBinPlugin r_bin_plugin_mach0 = {
 	.imports = &imports,
 	.size = &size,
 	.info = &info,
+	.header = MACH0_(mach_headerfields),
+	.fields = MACH0_(mach_fields),
 	.libs = &libs,
 	.relocs = &relocs,
 	.create = &create,

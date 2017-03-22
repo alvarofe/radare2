@@ -43,7 +43,7 @@ Move the comments to the right changing their margin with asm.cmtmargin
 Execute a command on the visual prompt with cmd.vprompt
 Reduce the delta where flag resolving by address is used with cfg.delta
 Disable these messages with 'e cfg.fortunes = false' in your ~/.radare2rc
-Change your fortune types with 'e cfg.fortunetype = fun,tips,nsfw' in your ~/.radare2rc
+Change your fortune types with 'e cfg.fortunes.type = fun,tips,nsfw' in your ~/.radare2rc
 Show offsets in graphs with 'e graph.offset = true'
 Execute a command every time a breakpoint is hit with 'e cmd.bp = !my-program'
 Disassemble in intel syntax with 'e asm.syntax = intel'.
@@ -80,3 +80,8 @@ For a full list of commands see `strings /dev/urandom`
 Thanks for using radare2!
 give | and > a try piping and redirection
 Run .dmm* to load the flags of the symbols of all modules loaded in the debugger
+Use V! to enter into the visual panels mode (dwm style)
+Toggle between disasm and graph with the space key
+The more 'a' you add after 'aa' the more analysis steps are executed.
+Review all the subcommands of aa to see better ways to analyze your targets.
+Use /m to carve for known magic headers. speedup with search.

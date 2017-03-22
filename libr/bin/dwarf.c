@@ -367,7 +367,7 @@ beach:
 
 static inline void add_sdb_addrline(Sdb *s, ut64 addr, const char *file, ut64 line, FILE *f, int mode) {
 	const char *p;
-	char fileline[128];
+	char *fileline;
 	char offset[64];
 	char *offset_ptr;
 
@@ -398,16 +398,11 @@ static inline void add_sdb_addrline(Sdb *s, ut64 addr, const char *file, ut64 li
 #else
 	p = file;
 #endif
-	snprintf (fileline, sizeof (fileline) - 1, "%s|%"PFMT64d, p, line);
+	fileline = r_str_newf ("%s|%"PFMT64d, p, line);
 	offset_ptr = sdb_itoa (addr, offset, 16);
-
-	if (!sdb_add (s, offset_ptr, fileline, 0)) {
-		sdb_set (s, offset_ptr, fileline, 0);
-	}
-
-	if (!sdb_add (s, fileline, offset_ptr, 0)) {
-		sdb_set (s, fileline, offset_ptr, 0);
-	}
+	sdb_add (s, offset_ptr, fileline, 0);
+	sdb_add (s, fileline, offset_ptr, 0);
+	free (fileline);
 }
 
 static const ut8* r_bin_dwarf_parse_ext_opcode(const RBin *a, const ut8 *obuf,
@@ -1536,7 +1531,8 @@ R_API RList *r_bin_dwarf_parse_line(RBin *a, int mode) {
 		// k bin/cur/addrinfo/*
 		SdbListIter *iter;
 		SdbKv *kv;
-		ls_foreach (binfile->sdb_addrinfo->ht->list, iter, kv) {
+		SdbList *ls = sdb_foreach_list (binfile->sdb_addrinfo, false);
+		ls_foreach (ls, iter, kv) {
 			if (!strncmp (kv->key, "0x", 2)) {
 				ut64 addr;
 				RBinDwarfRow *row;
@@ -1544,6 +1540,7 @@ R_API RList *r_bin_dwarf_parse_line(RBin *a, int mode) {
 				char *file = strdup (kv->value);
 				if (!file) {
 					free (buf);
+					ls_free (ls);
 					return NULL;
 				}
 				char *tok = strchr (file, '|');
@@ -1557,6 +1554,7 @@ R_API RList *r_bin_dwarf_parse_line(RBin *a, int mode) {
 				free (file);
 			}
 		}
+		ls_free (ls);
 		free (buf);
 	}
 	return list;

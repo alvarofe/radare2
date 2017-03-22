@@ -7,7 +7,6 @@
 #include <r_util.h>
 #include <r_reg.h>
 #include <r_bp.h>
-#include <r_db.h>
 #include <r_io.h>
 #include <r_syscall.h>
 
@@ -133,9 +132,11 @@ typedef struct r_debug_map_t {
 	ut64 addr;
 	ut64 addr_end;
 	ut64 size;
+	ut64 offset;
 	char *file;
 	int perm;
 	int user;
+	bool shared;
 } RDebugMap;
 
 typedef struct r_debug_signal_t {
@@ -189,6 +190,7 @@ typedef struct r_debug_t {
 	int bits; /// XXX: MUST SET ///
 	int hitinfo;
 
+	int main_pid;
 	int pid; /* selected process id */
 	int tid; /* selected thread id */
 	int forked_pid; /* last pid created by fork */
@@ -207,6 +209,7 @@ typedef struct r_debug_t {
 	int trace_execs; /* stop on new execs */
 	int trace_aftersyscall; /* stop after the syscall (before if disabled) */
 	int trace_clone; /* stop on new threads */
+	int follow_child; /* On fork, trace the child */
 	char *glob_libs; /* stop on lib load */
 	char *glob_unlibs; /* stop on lib unload */
 	bool consbreak; /* SIGINT handle for attached processes */
@@ -266,18 +269,20 @@ typedef struct r_debug_info_t {
 	int status; // zombie, running, sleeping, ...
 	int signum;
 	void * lib;
+	void * thread;
+	char *kernel_stack;
 	// retrieve mem/fd/core limits?
 	// list of threads ? hasthreads? counter?
 	// environment?
-	// /proc/pid/stack ???
 	// /proc/pid/syscall ???
-	//
 } RDebugInfo;
 
 /* TODO: pass dbg and user data pointer everywhere */
 typedef struct r_debug_plugin_t {
 	const char *name;
 	const char *license;
+	const char *author;
+	const char *version;
 	//const char **archs; // MUST BE DEPREACTED!!!!
 	ut32 bits;
 	const char *arch;
@@ -326,7 +331,10 @@ typedef struct r_debug_pid_t {
 	int pid;
 	char status; /* stopped, running, zombie, sleeping ,... */
 	int runnable; /* when using 'run', 'continue', .. this proc will be runnable */
+	bool signalled;
 	char *path;
+	int uid;
+	int gid;
 	ut64 pc;
 } RDebugPid;
 
@@ -362,6 +370,9 @@ R_API int r_debug_continue_syscall(RDebug *dbg, int sc);
 R_API int r_debug_continue_syscalls(RDebug *dbg, int *sc, int n_sc);
 R_API int r_debug_continue(RDebug *dbg);
 R_API int r_debug_continue_kill(RDebug *dbg, int signal);
+#if __WINDOWS__ && !__CYGWIN__
+R_API int r_debug_continue_pass_exception(RDebug *dbg);
+#endif
 
 /* process/thread handling */
 R_API int r_debug_select(RDebug *dbg, int pid, int tid);

@@ -1,18 +1,20 @@
 -include config-user.mk
 include global.mk
 
-PREVIOUS_RELEASE=1.0.2
+PREVIOUS_RELEASE=1.2.0
 
 R2R=radare2-regressions
 R2R_URL=$(shell doc/repo REGRESSIONS)
 R2BINS=$(shell cd binr ; echo r*2 r2agent r2pm)
+BUILDSEC=$(shell date "+__%H:%M:%S")
 DATADIRS=libr/cons/d libr/bin/d libr/asm/d libr/syscall/d libr/magic/d libr/anal/d
 USE_ZIP=YES
 ZIP=zip
 
 R2VC=$(shell git rev-list --all --count 2>/dev/null)
 ifeq ($(R2VC),)
-R2VC=9999999
+# release
+R2VC=0
 endif
 
 STRIP?=strip
@@ -51,7 +53,7 @@ all: plugins.cfg libr/include/r_version.h
 	${MAKE} -C libr
 	${MAKE} -C binr
 
-.PHONY: libr/include/r_version.h
+#.PHONY: libr/include/r_version.h
 GIT_TAP=$(shell git describe --tags --match "[0-9]*" 2>/dev/null || echo $(VERSION))
 GIT_TIP=$(shell git rev-parse HEAD 2>/dev/null || echo HEAD)
 ifndef SOURCE_DATE_EPOCH
@@ -67,9 +69,9 @@ libr/include/r_version.h:
 	@echo $(Q)#define R2_VERSION_COMMIT $(R2VC)$(Q) >> $@.tmp
 	@echo $(Q)#define R2_GITTAP $(ESC)"$(GIT_TAP)$(ESC)"$(Q) >> $@.tmp
 	@echo $(Q)#define R2_GITTIP $(ESC)"$(GIT_TIP)$(ESC)"$(Q) >> $@.tmp
-	@echo $(Q)#define R2_BIRTH $(ESC)"$(GIT_NOW)$(ESC)"$(Q) >> $@.tmp
+	@echo $(Q)#define R2_BIRTH $(ESC)"$(GIT_NOW)$(BUILDSEC)$(ESC)"$(Q) >> $@.tmp
 	@echo $(Q)#endif$(Q) >> $@.tmp
-	@cmp -s $@.tmp $@ || (mv -f $@.tmp $@ && echo "Update libr/include/r_version.h")
+	@mv -f $@.tmp $@
 	@rm -f $@.tmp
 
 plugins.cfg:
@@ -152,11 +154,13 @@ ifneq ($(USE_ZIP),NO)
 endif
 
 clean: rmd
+	rm -f libr/libr.a
 	for DIR in shlr libr binr ; do (cd "$$DIR" ; ${MAKE} clean) ; done
 
 distclean mrproper:
 	-rm -f `find . -type f -name '*.d'`
 	rm -f `find . -type f -name '*.o'`
+	rm -f libr/libr.a
 	for DIR in libr binr shlr ; do ( cd "$$DIR" ; ${MAKE} mrproper) ; done
 	rm -f config-user.mk plugins.cfg libr/config.h
 	rm -f libr/include/r_userconf.h libr/config.mk
@@ -203,6 +207,9 @@ install love: install-doc install-man install-www
 		rm -f last ; ln -fs $(VERSION) last
 	rm -rf "${DESTDIR}${DATADIR}/radare2/${VERSION}/hud"
 	mkdir -p "${DESTDIR}${DATADIR}/radare2/${VERSION}/hud"
+	mkdir -p "${DESTDIR}${BINDIR}"
+	ln -fs "${PWD}/sys/indent.sh" "${DESTDIR}${BINDIR}/r2-indent"
+	ln -fs "${PWD}/sys/r2-docker.sh" "${DESTDIR}${BINDIR}/r2-docker"
 	cp -f doc/hud "${DESTDIR}${DATADIR}/radare2/${VERSION}/hud/main"
 	mkdir -p "${DESTDIR}${DATADIR}/radare2/${VERSION}/"
 	sys/ldconfig.sh
@@ -242,6 +249,9 @@ symstall install-symlink: install-man-symlink install-doc-symlink install-pkgcon
 		echo "$$DIR" ; \
 		${MAKE} install-symlink ); \
 	done
+	mkdir -p "${DESTDIR}${BINDIR}"
+	ln -fs "${PWD}/sys/indent.sh" "${DESTDIR}${BINDIR}/r2-indent"
+	ln -fs "${PWD}/sys/r2-docker.sh" "${DESTDIR}${BINDIR}/r2-docker"
 	mkdir -p "${DESTDIR}${DATADIR}/radare2/${VERSION}/hud"
 	cd "$(DESTDIR)$(LIBDIR)/radare2/" ;\
 		rm -f last ; ln -fs $(VERSION) last
@@ -253,6 +263,8 @@ symstall install-symlink: install-man-symlink install-doc-symlink install-pkgcon
 	./configure-plugins --rm-static $(DESTDIR)/$(LIBDIR)/radare2/last/
 
 deinstall uninstall:
+	rm -f $(DESTDIR)$(BINDIR)/r2-indent
+	rm -f $(DESTDIR)$(BINDIR)/r2-docker
 	cd libr && ${MAKE} uninstall PARENT=1
 	cd binr && ${MAKE} uninstall PARENT=1
 	cd shlr && ${MAKE} uninstall PARENT=1
@@ -300,6 +312,15 @@ purge: purge-doc purge-dev user-uninstall
 	rm -f "${DESTDIR}${LIBDIR}/libr2.${EXT_SO}"
 	rm -rf "${DESTDIR}${LIBDIR}/radare2"
 	rm -rf "${DESTDIR}${INCLUDEDIR}/libr"
+
+purge2:
+	$(MAKE) purge
+ifneq ($(PREFIX),/usr)
+	$(MAKE) purge PREFIX=/usr
+endif
+ifneq ($(PREFIX),/usr/local)
+	$(MAKE) purge PREFIX=/usr/local
+endif
 
 R2V=radare2-${VERSION}
 

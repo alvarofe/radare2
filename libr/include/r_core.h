@@ -74,9 +74,9 @@ typedef struct r_core_log_t {
 } RCoreLog;
 
 typedef struct r_core_file_t {
-	RIOMap *map;
+	RIOMap *map;	//TODO: replace with mapid
 	int dbg;
-	RIODesc *desc;
+	RIODesc *desc;	//TODO: replace with fd
 	RBinBind binb;
 	const struct r_core_t *core;
 	ut8 alive;
@@ -130,7 +130,6 @@ typedef struct r_core_t {
 	RFlag *flags;
 	RSearch *search;
 	RIOSection *section;
-	RSign *sign;
 	RFS *fs;
 	REgg *egg;
 	RCoreLog *log;
@@ -222,7 +221,7 @@ R_API int r_core_seek_base (RCore *core, const char *hex);
 R_API void r_core_seek_previous (RCore *core, const char *type);
 R_API void r_core_seek_next (RCore *core, const char *type);
 R_API int r_core_seek_align(RCore *core, ut64 align, int count);
-R_API int r_core_seek_archbits (RCore *core, ut64 addr);
+R_API void r_core_seek_archbits (RCore *core, ut64 addr);
 R_API int r_core_block_read(RCore *core);
 R_API int r_core_block_size(RCore *core, int bsize);
 R_API int r_core_read_at(RCore *core, ut64 addr, ut8 *buf, int size);
@@ -237,7 +236,7 @@ R_API int r_core_visual(RCore *core, const char *input);
 R_API int r_core_visual_graph(RCore *core, RAGraph *g, RAnalFunction *_fcn, int is_interactive);
 R_API int r_core_fcn_graph(RCore *core, RAnalFunction *_fcn);
 R_API int r_core_visual_panels(RCore *core);
-R_API int r_core_visual_cmd(RCore *core, int ch);
+R_API int r_core_visual_cmd(RCore *core, const char *arg);
 R_API void r_core_visual_seek_animation (RCore *core, ut64 addr);
 R_API void r_core_visual_asm(RCore *core, ut64 addr);
 R_API void r_core_visual_colors(RCore *core);
@@ -295,6 +294,7 @@ R_API void r_core_debug_rr (RCore *core, RReg *reg);
 /* project */
 R_API bool r_core_project_load(RCore *core, const char *prjfile, const char *rcfile);
 R_API RThread *r_core_project_load_bg(RCore *core, const char *prjfile, const char *rcfile);
+R_API void r_core_project_execute_cmds(RCore *core, const char *prjfile);
 
 #define R_CORE_FOREIGN_ADDR -1
 R_API int r_core_yank(RCore *core, ut64 addr, int len);
@@ -309,7 +309,7 @@ R_API int r_core_yank_cat (RCore *core, ut64 pos);
 R_API int r_core_yank_cat_string (RCore *core, ut64 pos);
 R_API int r_core_yank_hud_file (RCore *core, const char *input);
 R_API int r_core_yank_hud_path (RCore *core, const char *input, int dir);
-R_API int r_core_yank_file_ex (RCore *core, const char *input);
+R_API bool r_core_yank_file_ex (RCore *core, const char *input);
 R_API int r_core_yank_file_all (RCore *core, const char *input);
 
 #define R_CORE_LOADLIBS_ENV 1
@@ -336,9 +336,9 @@ R_API int r_core_process_input_pade(RCore *core, const char *input, char** hex, 
 
 /* anal.c */
 R_API RAnalOp* r_core_anal_op(RCore *core, ut64 addr);
-R_API void r_core_anal_esil (RCore *core, const char *str, const char *addr);
+R_API void r_core_anal_esil(RCore *core, const char *str, const char *addr);
 R_API void r_core_anal_fcn_merge (RCore *core, ut64 addr, ut64 addr2);
-R_API const char *r_core_anal_optype_colorfor(RCore *core, ut64 addr);
+R_API const char *r_core_anal_optype_colorfor(RCore *core, ut64 addr, bool verbose);
 R_API ut64 r_core_anal_address (RCore *core, ut64 addr);
 R_API void r_core_anal_undefine (RCore *core, ut64 off);
 R_API void r_core_anal_hint_print (RAnal* a, ut64 addr, int mode);
@@ -496,13 +496,12 @@ R_API void r_core_rtr_cmd(RCore *core, const char *input);
 R_API int r_core_rtr_http(RCore *core, int launch, const char *path);
 R_API int r_core_rtr_http_stop(RCore *u);
 
-R_API void r_core_visual_define (RCore *core);
 R_API void r_core_visual_config (RCore *core);
 R_API void r_core_visual_mounts (RCore *core);
 R_API void r_core_visual_anal (RCore *core);
 R_API void r_core_seek_next (RCore *core, const char *type);
 R_API void r_core_seek_previous (RCore *core, const char *type);
-R_API void r_core_visual_define (RCore *core);
+R_API void r_core_visual_define (RCore *core, const char *arg);
 R_API int r_core_visual_trackflags (RCore *core);
 R_API int r_core_visual_comments (RCore *core);
 R_API int r_core_visual_prompt (RCore *core);
@@ -518,6 +517,7 @@ R_API void r_core_hack_help(const RCore *core);
 R_API int r_core_hack(RCore *core, const char *op);
 R_API int r_core_dump(RCore *core, const char *file, ut64 addr, ut64 size, int append);
 R_API void r_core_diff_show(RCore *core, RCore *core2);
+R_API void r_core_clippy(const char *msg);
 
 /* watchers */
 R_API void r_core_cmpwatch_free (RCoreCmpWatcher *w);
@@ -548,17 +548,19 @@ typedef struct {
 	ut32 functions;
 	ut32 symbols;
 	ut32 strings;
-	ut32 imports;
 	ut32 rwx;
 } RCoreAnalStatsItem;
 typedef struct {
 	RCoreAnalStatsItem *block;
 } RCoreAnalStats;
 
-R_API char *r_core_anal_hasrefs(RCore *core, ut64 value);
+R_API bool core_anal_bbs(RCore *core, ut64 len);
+R_API char *r_core_anal_hasrefs(RCore *core, ut64 value, bool verbose);
+R_API char *r_core_anal_get_comments(RCore *core, ut64 addr);
 R_API RCoreAnalStats* r_core_anal_get_stats (RCore *a, ut64 from, ut64 to, ut64 step);
 R_API void r_core_anal_stats_free (RCoreAnalStats *s);
-R_API void r_core_anal_list_vtables(void *core, bool printJson);
+R_API void r_core_anal_list_vtables (void *core, bool printJson);
+R_API void r_core_anal_print_rtti (void *core);
 
 R_API void r_core_syscmd_ls(const char *input);
 R_API void r_core_syscmd_cat(const char *file);
@@ -594,6 +596,80 @@ extern RCorePlugin r_core_plugin_java;
 extern RCorePlugin r_core_plugin_anal;
 
 #endif
+
+/*
+	RTTI Parsing Information
+	MSVC(Microsoft visual studio compiler) rtti structure
+	information:
+*/
+
+typedef struct type_descriptor_t {
+	ut64 pVFTable;//Always point to type_info's vftable
+	int spare;
+	char* className;
+} type_descriptor;
+
+typedef struct class_hierarchy_descriptor_t {
+	int signature;//always 0
+
+	//bit 0 --> Multiple inheritance
+	//bit 1 --> Virtual inheritance
+	int attributes;
+
+	//total no of base classes
+	// including itself
+	int numBaseClasses;
+
+	//Array of base class descriptor's
+	RList* baseClassArray;
+} class_hierarchy_descriptor;
+
+typedef struct base_class_descriptor_t {
+	//Type descriptor of current base class
+	type_descriptor* typeDescriptor;
+
+	//Number of direct bases
+	//of this base class
+	int numContainedBases;
+
+	//vftable offset
+	int mdisp;
+
+	// vbtable offset
+	int pdisp;
+
+	//displacement of the base class
+	//vftable pointer inside the vbtable
+	int vdisp;
+
+	//don't know what's this
+	int attributes;
+
+	//class hierarchy descriptor
+	//of this base class
+	class_hierarchy_descriptor* classDescriptor;
+} base_class_descriptor;
+
+typedef struct rtti_complete_object_locator_t {
+	int signature;
+
+	//within class offset
+	int vftableOffset;
+
+	//don't know what's this
+	int cdOffset;
+
+	//type descriptor for the current class
+	type_descriptor* typeDescriptor;
+
+	//hierarchy descriptor for current class
+	class_hierarchy_descriptor* hierarchyDescriptor;
+} rtti_complete_object_locator;
+
+typedef struct run_time_type_information_t {
+	ut64 vtable_start_addr;
+	ut64 rtti_addr;
+} rtti_struct;
 
 #ifdef __cplusplus
 }

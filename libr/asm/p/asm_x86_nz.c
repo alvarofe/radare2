@@ -114,6 +114,7 @@ typedef struct Opcode_t {
 	size_t op_len;
 	bool is_short;
 	ut8 opcode[3];
+	int operands_count;
 	Operand operands[2];
 } Opcode;
 
@@ -124,17 +125,29 @@ static ut8 getsib(const ut8 sib) {
 	return (sib & 0x8) ? 3 : getsib ((sib << 1) | 1) - 1;
 }
 
+static int is_al_reg(const Operand op) {
+	if (op.type & OT_MEMORY) {
+		return 0;
+	}
+	if (op.reg == X86R_AL && op.type & OT_BYTE) {
+		return 1;
+	}
+	return 0;
+}
+
 static int process_group_1(RAsm *a, ut8 *data, const Opcode op) {
 	int l = 0;
 	int modrm = 0;
 	int mod_byte = 0;
 	int offset = 0;
+	int mem_ref = 0;
 	st32 immediate = 0;
 	if (!op.operands[1].is_good_flag) {
 		return -1;
 	}
-	if (a->bits == 64 && op.operands[0].type & OT_QWORD) data[l++] = 0x48;
-
+	if (a->bits == 64 && op.operands[0].type & OT_QWORD) {
+		data[l++] = 0x48;
+	}
 	if (!strcmp (op.mnemonic, "adc")) {
 		modrm = 2;
 	} else if (!strcmp (op.mnemonic, "add")) {
@@ -172,14 +185,19 @@ static int process_group_1(RAsm *a, ut8 *data, const Opcode op) {
 		if (offset < ST8_MIN || offset > ST8_MAX) {
 			mod_byte = 2;
 		}
-		data[l++] = mod_byte << 6 | modrm << 3 | op.operands[0].regs[0];
-
+		int reg0 = op.operands[0].regs[0];
+		if (reg0 == -1) {
+			mem_ref = 1;
+			reg0 = 5;
+			mod_byte = 0;
+		}
+		data[l++] = mod_byte << 6 | modrm << 3 | reg0;
 		if (op.operands[0].regs[0] == X86R_ESP) {
 			data[l++] = 0x24;
 		}
-		if (mod_byte) {
+		if (mod_byte || mem_ref) {
 			data[l++] = offset;
-			if (mod_byte == 2) {
+			if (mod_byte == 2 || mem_ref) {
 				data[l++] = offset >> 8;
 				data[l++] = offset >> 16;
 				data[l++] = offset >> 24;
@@ -268,11 +286,19 @@ static int process_1byte_op(RAsm *a, ut8 *data, const Opcode op, int op1) {
 	int reg = 0;
 	int rm = 0;
 	int rex = 0;
+	int mem_ref = 0;
 	st32 offset = 0;
 
 	if (!op.operands[1].is_good_flag) {
 		return -1;
 	}
+
+	if (op.operands[0].reg == X86R_AL && op.operands[1].type & OT_CONSTANT) {
+		data[l++] = op1 + 4;
+		data[l++] = op.operands[1].immediate * op.operands[1].sign;
+		return l;
+	}
+
 	if (a->bits == 64 &&
 		((op.operands[0].type & OT_QWORD) |
 		 (op.operands[1].type & OT_QWORD))) {
@@ -297,12 +323,19 @@ static int process_1byte_op(RAsm *a, ut8 *data, const Opcode op, int op1) {
 		}
 		reg = op.operands[1].reg;
 		rm = op.operands[0].regs[0];
-
 		offset = op.operands[0].offset * op.operands[0].offset_sign;
-		if (offset) {
-			mod_byte = 1;
-			if (offset < ST8_MIN || offset > ST8_MAX) {
-				mod_byte = 2;
+		if (rm == -1) {
+			rm = 5;
+			mem_ref = 1;
+		} else {
+			if (offset) {
+				mod_byte = 1;
+				if (offset < ST8_MIN || offset > ST8_MAX) {
+					mod_byte = 2;
+				}
+			} else if (op.operands[0].regs[1] != X86R_UNDEFINED) {
+				rm = 4;
+				offset = op.operands[0].regs[1] << 3;
 			}
 		}
 	} else if (op.operands[0].type & OT_REGALL) {
@@ -361,9 +394,10 @@ static int process_1byte_op(RAsm *a, ut8 *data, const Opcode op, int op1) {
 		}
 	}
 	data[l++] = mod_byte << 6 | reg << 3 | rm;
-	if (mod_byte > 0 && mod_byte < 3) {
+	if (offset || mem_ref) {
+	//if ((mod_byte > 0 && mod_byte < 3) || mem_ref) {
 		data[l++] = offset;
-		if (mod_byte == 2) {
+		if (mod_byte == 2 || mem_ref) {
 			data[l++] = offset >> 8;
 			data[l++] = offset >> 16;
 			data[l++] = offset >> 24;
@@ -373,56 +407,67 @@ static int process_1byte_op(RAsm *a, ut8 *data, const Opcode op, int op1) {
 }
 
 static int opadc(RAsm *a, ut8 *data, const Opcode op) {
-	if (op.operands[1].type & OT_CONSTANT) {
+	if (op.operands[1].type & OT_CONSTANT &&
+	    !is_al_reg (op.operands[0])) {
 		return process_group_1 (a, data, op);
 	}
 	return process_1byte_op (a, data, op, 0x10);
 }
 
 static int opadd(RAsm *a, ut8 *data, const Opcode op) {
-	if (op.operands[1].type & OT_CONSTANT) {
+	if (op.operands[1].type & OT_CONSTANT &&
+	    !is_al_reg (op.operands[0])) {
 		return process_group_1 (a, data, op);
 	}
 	return process_1byte_op (a, data, op, 0x00);
 }
 
 static int opand(RAsm *a, ut8 *data, const Opcode op) {
-	if (op.operands[1].type & OT_CONSTANT) {
+	if (op.operands[1].type & OT_CONSTANT &&
+	    !is_al_reg (op.operands[0])) {
 		return process_group_1 (a, data, op);
 	}
 	return process_1byte_op (a, data, op, 0x20);
 }
 
 static int opcmp(RAsm *a, ut8 *data, const Opcode op) {
-	if (op.operands[1].type & OT_CONSTANT) {
+	if (op.operands[1].type & OT_CONSTANT &&
+	    !is_al_reg (op.operands[0])) {
 		return process_group_1 (a, data, op);
 	}
 	return process_1byte_op (a, data, op, 0x38);
 }
 
 static int opsub(RAsm *a, ut8 *data, const Opcode op) {
-	if (op.operands[1].type & OT_CONSTANT) {
+	if (op.operands[1].type & OT_CONSTANT &&
+	    !is_al_reg (op.operands[0])) {
 		return process_group_1 (a, data, op);
 	}
 	return process_1byte_op (a, data, op, 0x28);
 }
 
 static int opor(RAsm *a, ut8 * data, const Opcode op) {
-	if (op.operands[1].type & OT_CONSTANT) {
+	if (op.operands[1].type & OT_CONSTANT &&
+	    !is_al_reg (op.operands[0])) {
 		return process_group_1 (a, data, op);
 	}
 	return process_1byte_op (a, data, op, 0x08);
 }
 
 static int opxor(RAsm *a, ut8 * data, const Opcode op) {
-	if (op.operands[1].type & OT_CONSTANT) {
+	if (op.operands_count < 2) {
+		return -1;
+	}
+	if (op.operands[1].type & OT_CONSTANT &&
+	    !is_al_reg (op.operands[0])) {
 		return process_group_1 (a, data, op);
 	}
 	return process_1byte_op (a, data, op, 0x30);
 }
 
 static int opsbb(RAsm *a, ut8 *data, const Opcode op) {
-	if (op.operands[1].type & OT_CONSTANT) {
+	if (op.operands[1].type & OT_CONSTANT &&
+	    !is_al_reg (op.operands[0])) {
 		return process_group_1 (a, data, op);
 	}
 	return process_1byte_op (a, data, op, 0x18);
@@ -484,6 +529,161 @@ static int opcall(RAsm *a, ut8 *data, const Opcode op) {
 		data[l++] = immediate >> 16;
 		data[l++] = immediate >> 24;
 	}
+	return l;
+}
+
+static int opcmov(RAsm *a, ut8 *data, const Opcode op) {
+	int l = 0;
+	int mod_byte = 0;
+	int offset = 0;
+
+	if (op.operands[0].type & OT_MEMORY ||
+	    op.operands[1].type & OT_CONSTANT) {
+		return -1;
+	}
+
+	data[l++] = 0x0f;
+	char *cmov = op.mnemonic + 4;
+	if (!strcmp (cmov, "o")) {
+		data[l++] = 0x40;
+	} else if (!strcmp (cmov, "no")) {
+		data [l++] = 0x41;
+	} else if (!strcmp (cmov, "b") ||
+	           !strcmp (cmov, "c") ||
+	           !strcmp (cmov, "nae")) {
+		data [l++] = 0x42;
+	} else if (!strcmp (cmov, "ae") ||
+	           !strcmp (cmov, "nb") ||
+		   !strcmp (cmov, "nc")) {
+		data [l++] = 0x43;
+	} else if (!strcmp (cmov, "e") ||
+                   !strcmp (cmov, "z")) {
+		data [l++] = 0x44;
+	} else if (!strcmp (cmov, "ne") ||
+	           !strcmp (cmov, "nz")) {
+		data [l++] = 0x45;
+        } else if (!strcmp (cmov, "be") ||
+	           !strcmp (cmov, "na")) {
+		data [l++] = 0x46;
+        } else if (!strcmp (cmov, "a") ||
+	           !strcmp (cmov, "nbe")) {
+		data [l++] = 0x47;
+	} else if (!strcmp (cmov, "s")) {
+		data [l++] = 0x48;
+        } else if (!strcmp (cmov, "ns")) {
+		data [l++] = 0x49;
+        } else if (!strcmp (cmov, "p") ||
+	           !strcmp (cmov, "pe")) {
+		data [l++] = 0x4a;
+        } else if (!strcmp (cmov, "np") ||
+	           !strcmp (cmov, "po")) {
+		data [l++] = 0x4b;
+        } else if (!strcmp (cmov, "l") ||
+	           !strcmp (cmov, "nge")) {
+		data [l++] = 0x4c;
+        } else if (!strcmp (cmov, "ge") ||
+	           !strcmp (cmov, "nl")) {
+		data [l++] = 0x4d;
+        } else if (!strcmp (cmov, "le") ||
+	           !strcmp (cmov, "ng")) {
+		data [l++] = 0x4e;
+        } else if (!strcmp (cmov, "g") ||
+	           !strcmp (cmov, "nle")) {
+		data [l++] = 0x4f;
+        }
+
+	if (op.operands[0].type & OT_REGALL) {
+		if (op.operands[1].type & OT_MEMORY) {
+			if (op.operands[1].scale[0] > 1) {
+				if (op.operands[1].regs[1] != X86R_UNDEFINED) {
+					data[l++] = op.operands[0].reg << 3 | 4;
+					data[l++] = getsib (op.operands[1].scale[0]) << 6 |
+                                                            op.operands[1].regs[0] << 3 |
+                                                            op.operands[1].regs[1];
+					return l;
+				}
+				offset = op.operands[1].offset * op.operands[1].offset_sign;
+
+				if (op.operands[1].scale[0] == 2 && offset) {
+					data[l++] = 0x40 | op.operands[0].reg << 3 | 4; // 4 = SIB
+				} else {
+					data[l++] = op.operands[0].reg << 3 | 4; // 4 = SIB
+				}
+
+
+				if (op.operands[1].scale[0] == 2) {
+					data[l++] = op.operands[1].regs[0] << 3 | op.operands[1].regs[0];
+
+				} else {
+					data[l++] = getsib (op.operands[1].scale[0]) << 6 |
+                                                            op.operands[1].regs[0] << 3 | 5;
+				}
+
+				if (offset) {
+					data[l++] = offset;
+					if (offset < ST8_MIN || offset > ST8_MAX) {
+						data[l++] = offset >> 8;
+						data[l++] = offset >> 16;
+						data[l++] = offset >> 24;
+					}
+				}
+				return l;
+			}
+			if (op.operands[1].regs[1] != X86R_UNDEFINED) {
+				data[l++] = op.operands[0].reg << 3 | 4;
+				data[l++] = op.operands[1].regs[1] << 3 | op.operands[1].regs[0];
+				return l;
+			}
+
+			offset = op.operands[1].offset * op.operands[1].offset_sign;
+			if (op.operands[1].offset || op.operands[1].regs[0] == X86R_EBP) {
+				mod_byte = 1;
+			}
+			if (offset < ST8_MIN || offset > ST8_MAX) {
+				mod_byte = 2;
+			}
+
+			data[l++] = mod_byte << 6 | op.operands[0].reg << 3 | op.operands[1].regs[0];
+
+			if (mod_byte) {
+				data[l++] = offset;
+				if (mod_byte == 2) {
+					data[l++] = offset >> 8;
+					data[l++] = offset >> 16;
+					data[l++] = offset >> 24;
+				}
+			}
+		} else {
+			data[l++] = 0xc0 | op.operands[0].reg << 3 | op.operands[1].reg;
+		}
+	}
+
+	return l;
+}
+
+static int opmovx(RAsm *a, ut8 *data, const Opcode op) {
+	int l = 0;
+	int word = 0;
+	char *movx = op.mnemonic + 3;
+
+	if (!(op.operands[0].type & OT_REGTYPE && op.operands[1].type & OT_MEMORY)) {
+		return -1;
+	}
+	if (op.operands[1].type & OT_WORD) {
+		word = 1;
+	}
+
+	data[l++] = 0x0f;
+	if (!strcmp (movx, "zx")) {
+		data[l++] = 0xb6 + word;
+	} else if (!strcmp (movx, "sx")) {
+		data[l++] = 0xbe + word;
+	}
+	data[l++] = op.operands[0].reg << 3 | op.operands[1].regs[0];
+	if (op.operands[1].regs[0] == X86R_ESP) {
+		data[l++] = 0x24;
+	}
+
 	return l;
 }
 
@@ -815,54 +1015,54 @@ static int opjc(RAsm *a, ut8 *data, const Opcode op) {
 		}
 		return l;
 	}
-	
+
 	if (!op.is_short) {data[l++] = 0x0f;}
 	if (!strcmp (op.mnemonic, "ja") ||
-		!strcmp (op.mnemonic, "jnbe")) {
+            !strcmp (op.mnemonic, "jnbe")) {
 		data[l++] = 0x87;
 	} else if (!strcmp (op.mnemonic, "jae") ||
-				!strcmp (op.mnemonic, "jnb") ||
-				!strcmp (op.mnemonic, "jnc")) {
+                   !strcmp (op.mnemonic, "jnb") ||
+                   !strcmp (op.mnemonic, "jnc")) {
 		data[l++] = 0x83;
 	} else if (!strcmp (op.mnemonic, "jz") ||
-				!strcmp (op.mnemonic, "je")) {
+                   !strcmp (op.mnemonic, "je")) {
 		data[l++] = 0x84;
 	} else if (!strcmp (op.mnemonic, "jb") ||
-				!strcmp (op.mnemonic, "jnae") ||
-				!strcmp (op.mnemonic, "jc")) {
+                   !strcmp (op.mnemonic, "jnae") ||
+                   !strcmp (op.mnemonic, "jc")) {
 		data[l++] = 0x82;
 	} else if (!strcmp (op.mnemonic, "jbe") ||
-				!strcmp (op.mnemonic, "jna")) {
+                   !strcmp (op.mnemonic, "jna")) {
 		data[l++] = 0x86;
 	} else if (!strcmp (op.mnemonic, "jg") ||
-				!strcmp (op.mnemonic, "jnle")) {
+                   !strcmp (op.mnemonic, "jnle")) {
 		data[l++] = 0x8f;
 	} else if (!strcmp (op.mnemonic, "jge") ||
-				!strcmp (op.mnemonic, "jnl")) {
+                   !strcmp (op.mnemonic, "jnl")) {
 		data[l++] = 0x8d;
 	} else if (!strcmp (op.mnemonic, "jl") ||
-				!strcmp (op.mnemonic, "jnge")) {
+                   !strcmp (op.mnemonic, "jnge")) {
 		data[l++] = 0x8c;
 	} else if (!strcmp (op.mnemonic, "jle") ||
-				!strcmp (op.mnemonic, "jng")) {
+	           !strcmp (op.mnemonic, "jng")) {
 		data[l++] = 0x8e;
 	} else if (!strcmp (op.mnemonic, "jne") ||
-				!strcmp (op.mnemonic, "jnz")) {
+                   !strcmp (op.mnemonic, "jnz")) {
 		data[l++] = 0x85;
 	} else if (!strcmp (op.mnemonic, "jno")) {
 		data[l++] = 0x81;
 	} else if (!strcmp (op.mnemonic, "jnp") ||
-				!strcmp (op.mnemonic, "jpo")) {
+                   !strcmp (op.mnemonic, "jpo")) {
 		data[l++] = 0x8b;
 	} else if (!strcmp (op.mnemonic, "jns")) {
 		data[l++] = 0x89;
 	} else if (!strcmp (op.mnemonic, "jo")) {
 		data[l++] = 0x80;
 	} else if (!strcmp (op.mnemonic, "jp") ||
-				!strcmp(op.mnemonic, "jpe")) {
+                   !strcmp(op.mnemonic, "jpe")) {
 		data[l++] = 0x8a;
 	} else if (!strcmp (op.mnemonic, "js") ||
-				!strcmp (op.mnemonic, "jz")) {
+                   !strcmp (op.mnemonic, "jz")) {
 		data[l++] = 0x88;
 	}
 	if (op.is_short) {
@@ -889,9 +1089,10 @@ static int oplea(RAsm *a, ut8 *data, const Opcode op){
 	    op.operands[1].type & OT_MEMORY) {
 		data[l++] = 0x8d;
 		if (op.operands[1].regs[0] == X86R_UNDEFINED) {
+			int high = 0xff00 & op.operands[1].offset;
 			data[l++] = op.operands[0].reg << 3 | 5;
 			data[l++] = op.operands[1].offset;
-			data[l++] = op.operands[1].offset >> 6;
+			data[l++] = high >> 8;
 			data[l++] = op.operands[1].offset >> 16;
 			data[l++] = op.operands[1].offset >> 24;
 			return l;
@@ -1633,6 +1834,38 @@ LookupTable oplookup[] = {
 	{"cli", NULL, 0xfa, 1},
 	{"clts", NULL, 0x0f06, 2},
 	{"cmc", NULL, 0xf5, 1},
+	{"cmovo", &opcmov, 0},
+	{"cmovno", &opcmov, 0},
+	{"cmovb", &opcmov, 0},
+	{"cmovc", &opcmov, 0},
+	{"cmovnae", &opcmov, 0},
+	{"cmovae", &opcmov, 0},
+	{"cmovnb", &opcmov, 0},
+	{"cmovnc", &opcmov, 0},
+	{"cmove", &opcmov, 0},
+	{"cmovz", &opcmov, 0},
+	{"cmovne", &opcmov, 0},
+	{"cmovnz", &opcmov, 0},
+	{"cmovbe", &opcmov, 0},
+	{"cmovna", &opcmov, 0},
+	{"cmova", &opcmov, 0},
+	{"cmovnbe", &opcmov, 0},
+	{"cmovne", &opcmov, 0},
+	{"cmovnz", &opcmov, 0},
+	{"cmovs", &opcmov, 0},
+	{"cmovns", &opcmov, 0},
+	{"cmovp", &opcmov, 0},
+	{"cmovpe", &opcmov, 0},
+	{"cmovnp", &opcmov, 0},
+	{"cmovpo", &opcmov, 0},
+	{"cmovl", &opcmov, 0},
+	{"cmovnge", &opcmov, 0},
+	{"cmovge", &opcmov, 0},
+	{"cmovnl", &opcmov, 0},
+	{"cmovle", &opcmov, 0},
+	{"cmovng", &opcmov, 0},
+	{"cmovg", &opcmov, 0},
+	{"cmovnle", &opcmov, 0},
 	{"cmp", &opcmp, 0},
 	{"cmpsb", NULL, 0xa6, 1},
 	{"cmpsd", NULL, 0xa7, 1},
@@ -1709,6 +1942,8 @@ LookupTable oplookup[] = {
 	{"movsb", NULL, 0xa4, 1},
 	{"movsd", NULL, 0xa5, 1},
 	{"movsw", NULL, 0x66a5, 2},
+	{"movzx", &opmovx, 0},
+	{"movsx", &opmovx, 0},
 	{"mwait", NULL, 0x0f01c9, 3},
 	{"nop", NULL, 0x90, 1},
 	{"or", &opor, 0},
@@ -1897,12 +2132,14 @@ static Register parseReg(RAsm *a, const char *str, size_t *pos, ut32 *type) {
 		for (i = 0; regs64[i]; i++) {
 			if (!strncasecmp (regs64[i], token, length)) {
 				*type = (OT_GPREG & OT_REG (i)) | OT_QWORD;
+				a->bits = 64;
 				return i;
 			}
 		}
 		for (i = 0; regs64ext[i]; i++) {
 			if (!strncasecmp (regs64ext[i], token, length)) {
 				*type = (OT_GPREG & OT_REG (i)) | OT_QWORD;
+				a->bits = 64;
 				return i + 8;
 			}
 		}
@@ -2037,6 +2274,9 @@ static int parseOperand(RAsm *a, const char *str, Operand *op) {
 		Register reg = X86R_UNDEFINED;
 		while (str[pos] != ']') {
 			pos = nextpos;
+			if (!str[pos]) {
+				break;
+			}
 			last_type = getToken (str, &pos, &nextpos);
 
 			if (last_type == TT_SPECIAL) {
@@ -2165,22 +2405,24 @@ static int parseOpcode(RAsm *a, const char *op, Opcode *out) {
 	out->operands[0].sign = out->operands[1].sign = 1;
 	out->operands[0].is_good_flag = out->operands[1].is_good_flag = true;
 	out->is_short = false;
+	out->operands_count = 0;
 	if (args) {
 		args++;
 	} else {
 		return 1;
 	}
-
 	if (!strncasecmp (args, "short", 5)) {
 		out->is_short = true;
 		args += 5;
 	}
-
 	parseOperand (a, args, &(out->operands[0]));
 	args = strchr (args, ',');
 	if (args) {
 		args++;
 		parseOperand (a, args, &(out->operands[1]));
+		out->operands_count = 2;
+	} else {
+		out->operands_count = 1;
 	}
 	return 0;
 }
@@ -2208,6 +2450,14 @@ static int assemble16(RAsm *a, RAsmOp *ao, const char *str) {
 			data[l++] = 0x34;
 			data[l++] = n;
 		}
+	} else if (!strncmp (str, "jmp ", 4)) {
+		int n = getnum (a, str + 4);
+		if (n > 0x81) {
+			return -1;
+		}
+		data[l++] = 0xeb;
+		data[l++] = n - 2;
+
 	}
 	return l;
 }
@@ -2244,6 +2494,7 @@ static int assemble(RAsm *a, RAsmOp *ao, const char *str) {
 		}
 	}
 	//eprintf ("Error: Unknown instruction (%s)\n", instr.mnemonic);
+	free (instr.mnemonic);
 	return -1;
 }
 
@@ -2257,8 +2508,9 @@ RAsmPlugin r_asm_plugin_x86_nz = {
 	.assemble = &assemble };
 
 #ifndef CORELIB
-struct r_lib_struct_t radare_plugin = {
+RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ASM,
 	.data = &r_asm_plugin_x86_nz,
-	.version = R2_VERSION };
+	.version = R2_VERSION
+};
 #endif

@@ -471,9 +471,11 @@ static int r_core_rtr_http_run(RCore *core, int launch, const char *path) {
 	r_config_set (core->config, "scr.color", "false");
 	r_config_set (core->config, "asm.bytes", "false");
 	r_config_set (core->config, "scr.interactive", "false");
+	bool restoreSandbox = false;
 	if (r_config_get_i (core->config, "http.sandbox")) {
 		//(void)r_config_get_i (core->config, "cfg.sandbox");
 		r_config_set (core->config, "cfg.sandbox", "true");
+		restoreSandbox = true;
 	}
 	eprintf ("Starting http server...\n");
 	eprintf ("open http://%s:%d/\n", host, atoi (port));
@@ -807,6 +809,9 @@ the_end:
 	core->http_up = false;
 	r_socket_free (s);
 	r_config_free (newcfg);
+	if (restoreSandbox) {
+		r_sandbox_disable (true);
+	}
 	/* refresh settings - run callbacks */
 	r_config_set (origcfg, "scr.html", r_config_get (origcfg, "scr.html"));
 	r_config_set (origcfg, "scr.color", r_config_get (origcfg, "scr.color"));
@@ -974,7 +979,7 @@ R_API void r_core_rtr_add(RCore *core, const char *_input) {
 		proto = RTR_PROT_RAP;
 		host = input;
 	}
-	while (*host && iswhitechar (*host))
+	while (*host && ISWHITECHAR (*host))
 		host++;
 
 	if (!(ptr = strchr (host, ':'))) {
@@ -1161,7 +1166,7 @@ R_API void r_core_rtr_add(RCore *core, const char *_input) {
 R_API void r_core_rtr_remove(RCore *core, const char *input) {
 	int fd, i;
 
-	if (input[0] >= '0' && input[0] <= '9') {
+	if (IS_DIGIT(input[0])) {
 		fd = r_num_math (core->num, input);
 		for (i = 0; i < RTR_MAX_HOSTS; i++)
 			if (rtr_host[i].fd && rtr_host[i].fd->fd == fd) {
@@ -1190,7 +1195,7 @@ R_API void r_core_rtr_session(RCore *core, const char *input) {
 	int fd;
 
 	prompt[0] = 0;
-	if (input[0] >= '0' && input[0] <= '9') {
+	if (IS_DIGIT(input[0])) {
 		fd = r_num_math (core->num, input);
 		for (rtr_n = 0; rtr_host[rtr_n].fd \
 			&& rtr_host[rtr_n].fd->fd != fd \
@@ -1254,7 +1259,8 @@ static int r_core_rtr_rap_thread (RThread *th) {
 R_API void r_core_rtr_cmd(RCore *core, const char *input) {
 	char bufw[1024], bufr[8], *cmd_output = NULL;
 	const char *cmd = NULL;
-	int i, cmd_len, fd = atoi (input);
+	unsigned int cmd_len;
+	int i, fd = atoi (input);
 
 	// "=:"
 	if (*input == ':' && !strchr (input + 1, ':')) {
@@ -1319,9 +1325,10 @@ R_API void r_core_rtr_cmd(RCore *core, const char *input) {
 	r_socket_read (fh, (ut8*)bufr, 5);
 	if (bufr[0] == (char)(RAP_RMT_CMD)) {
 		cmd_len = r_read_at_be32 (bufr, 1);
-		cmd = malloc (cmd_len);
-		if (cmd) {
-			char *res = r_core_cmd_str (core, cmd);
+		char *rcmd = calloc (1, cmd_len + 1);
+		if (rcmd) {
+			r_socket_read (fh, (ut8*)rcmd, cmd_len);
+			char *res = r_core_cmd_str (core, rcmd);
 			if (res) {
 				int res_len = strlen (res) + 1;
 				ut8 *pkt = r_rap_packet ((RAP_RMT_CMD | RAP_RMT_REPLY), res_len);
@@ -1330,6 +1337,7 @@ R_API void r_core_rtr_cmd(RCore *core, const char *input) {
 				free (res);
 				free (pkt);
 			}
+			free (rcmd);
 		}
 		/* read response */
 		r_socket_read (fh, (ut8*)bufr, 5);

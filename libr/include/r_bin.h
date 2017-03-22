@@ -3,7 +3,6 @@
 
 #include <r_util.h>
 #include <r_types.h>
-#include <r_db.h>
 #include <r_io.h>
 #include <r_list.h>
 #include <r_bin_dwarf.h>
@@ -63,6 +62,8 @@ R_LIB_VERSION_HEADER (r_bin);
 #define R_BIN_REQ_EXPORTS   0x400000
 #define R_BIN_REQ_VERSIONINFO 0x800000
 #define R_BIN_REQ_PACKAGE     0x1000000
+#define R_BIN_REQ_HEADER   0x2000000
+#define R_BIN_REQ_LISTPLUGINS   0x4000000
 
 enum {
 	R_BIN_SYM_ENTRY,
@@ -149,6 +150,8 @@ typedef struct r_bin_info_t {
 	int big_endian;
 	char *actual_checksum;
 	char *claimed_checksum;
+	int pe_overlay;
+	bool signature;
 	ut64 dbg_info;
 	RBinHash sum[3];
 	ut64 baddr;
@@ -180,7 +183,7 @@ typedef struct r_bin_object_t {
 	RList/*<??>*/ *strings;
 	RList/*<RBinClass>*/ *classes;
 	RList/*<RBinDwarfRow>*/ *lines;
-	RList/*<??>*/ *mem;
+	RList/*<??>*/ *mem;	//RBinMem maybe?
 	RBinInfo *info;
 	RBinAddr *binsym[R_BIN_SYM_LAST];
 	struct r_bin_plugin_t *plugin;
@@ -227,7 +230,8 @@ typedef struct r_bin_t {
 	int maxstrlen;
 	ut64 maxstrbuf;
 	int rawstr;
-	Sdb *sdb;
+	Sdb *sdb; //rename this pls
+	RIDPool *file_ids;
 	RList/*<RBinPlugin>*/ *plugins;
 	RList/*<RBinXtrPlugin>*/ *binxtrs;
 	RList/*<RBinFile>*/ *binfiles;
@@ -243,6 +247,7 @@ typedef struct r_bin_t {
 	char *prefix; // bin.prefix
 	ut64 filter_rules;
 	bool demanglercmd;
+	bool verbose;
 } RBin;
 
 typedef struct r_bin_xtr_metadata_t {
@@ -256,21 +261,23 @@ typedef struct r_bin_xtr_metadata_t {
 typedef int (*FREE_XTR)(void *xtr_obj);
 typedef struct r_bin_xtr_extract_t {
 	char *file;
-	Sdb *sdb;
+	ut8 *buffer;
 	ut64 size;
 	ut64 offset;
+	ut64 baddr;
+	ut64 laddr;
 	int file_count;
 	int loaded;
 	RBinXtrMetadata *metadata;
 } RBinXtrData;
 
-R_API RBinXtrData * r_bin_xtrdata_new (RBuffer *buf, ut64 offset, ut64 size, ut32 file_count, RBinXtrMetadata *metadata, Sdb *sdb);
+R_API RBinXtrData * r_bin_xtrdata_new (RBuffer *buf, ut64 offset, ut64 size, ut32 file_count, RBinXtrMetadata *metadata);
 R_API void r_bin_xtrdata_free (void /*RBinXtrData*/ *data);
 R_API void r_bin_info_free (RBinInfo *rb);
 R_API void r_bin_import_free(void *_imp);
 R_API void r_bin_symbol_free(void *_sym);
 R_API void r_bin_string_free(void *_str);
-R_API void r_bin_field_free(void *_fld);
+// R_API void r_bin_field_free(void *_fld);
 
 typedef struct r_bin_xtr_plugin_t {
 	char *name;
@@ -278,9 +285,9 @@ typedef struct r_bin_xtr_plugin_t {
 	char *license;
 	int (*init)(void *user);
 	int (*fini)(void *user);
-	int (*check)(RBin *bin);
+	bool (*check)(RBin *bin);
 // XXX: ut64 for size is maybe too much, what about st64? signed sizes are useful for detecting errors
-	int (*check_bytes)(const ut8 *bytes, ut64 sz);
+	bool (*check_bytes)(const ut8 *bytes, ut64 sz);
 	RBinXtrData * (*extract_from_bytes)(RBin *bin, const ut8 *buf, ut64 size, int idx);
 	RList * (*extractall_from_bytes)(RBin *bin, const ut8 *buf, ut64 size);
 	RBinXtrData * (*extract)(RBin *bin, int idx);
@@ -294,6 +301,8 @@ typedef struct r_bin_xtr_plugin_t {
 typedef struct r_bin_plugin_t {
 	char *name;
 	char *desc;
+	char *author;
+	char *version;
 	char *license;
 	int (*init)(void *user);
 	int (*fini)(void *user);
@@ -302,8 +311,8 @@ typedef struct r_bin_plugin_t {
 	void *(*load_bytes)(RBinFile *arch, const ut8 *buf, ut64 sz, ut64 loadaddr, Sdb *sdb);
 	ut64 (*size)(RBinFile *bin); // return ut64 maybe? meh
 	int (*destroy)(RBinFile *arch);
-	int (*check)(RBinFile *arch);
-	int (*check_bytes)(const ut8 *buf, ut64 length);
+	bool (*check)(RBinFile *arch);
+	bool (*check_bytes)(const ut8 *buf, ut64 length);
 	ut64 (*baddr)(RBinFile *arch);
 	ut64 (*boffset)(RBinFile *arch);
 	RBinAddr* (*binsym)(RBinFile *arch, int num);
@@ -429,11 +438,17 @@ typedef struct r_bin_string_t {
 } RBinString;
 
 typedef struct r_bin_field_t {
-	char *name;
 	ut64 vaddr;
 	ut64 paddr;
+	int size;
 	ut32 visibility;
+	char *name;
+	char *comment;
+	char *format;
 } RBinField;
+
+R_API RBinField *r_bin_field_new(ut64 paddr, ut64 vaddr, int size, const char *name, const char *comment, const char *format);
+R_API void r_bin_field_free(void *); //RBinField *field);
 
 typedef struct r_bin_mem_t {	//new toy for esil-init
 	char *name;
@@ -478,7 +493,7 @@ R_API int r_bin_load(RBin *bin, const char *file, ut64 baseaddr, ut64 loadaddr, 
 R_API int r_bin_reload(RBin *bin, RIODesc *desc, ut64 baseaddr);
 R_API int r_bin_load_as(RBin *bin, const char *file, ut64 baseaddr, ut64 loadaddr, int xtr_idx, int fd, int rawstr, int fileoffset, const char *name);
 R_API int r_bin_load_io(RBin *bin, RIODesc *desc, ut64 baseaddr, ut64 loadaddr, int xtr_idx);
-R_API int r_bin_load_io_at_offset_as(RBin *bin, RIODesc *desc, ut64 baseaddr, ut64 loadaddr, int xtr_idx, ut64 offset, const char *name);
+R_API bool r_bin_load_io_at_offset_as(RBin *bin, RIODesc *desc, ut64 baseaddr, ut64 loadaddr, int xtr_idx, ut64 offset, const char *name);
 R_API int r_bin_load_io_at_offset_as_sz(RBin *bin, RIODesc *desc, ut64 baseaddr, ut64 loadaddr, int xtr_idx, ut64 offset, const char *name, ut64 sz);
 R_API void r_bin_bind(RBin *b, RBinBind *bnd);
 R_API int r_bin_add(RBin *bin, RBinPlugin *foo);
@@ -500,6 +515,7 @@ R_API bool r_bin_file_object_new_from_xtr_data(RBin *bin, RBinFile *bf,
 						ut64 baseaddr, ut64 loadaddr,
 						RBinXtrData *xtr_data);
 R_API int r_bin_list(RBin *bin, int json);
+R_API int r_bin_list_plugin(RBin *bin, const char* name, int json);
 R_API RBinObject *r_bin_get_object(RBin *bin);
 R_API ut64 r_binfile_get_baddr (RBinFile *binfile);
 R_API ut64 r_bin_get_baddr(RBin *bin);
@@ -516,6 +532,7 @@ R_API char *r_bin_demangle_cxx(RBinFile *binfile, const char *str, ut64 vaddr);
 R_API char *r_bin_demangle_msvc(const char *str);
 R_API char *r_bin_demangle_swift(const char *s, bool syscmd);
 R_API char *r_bin_demangle_objc(RBinFile *binfile, const char *sym);
+R_API char *r_bin_demangle_rust(RBinFile *binfile, const char *str, ut64 vaddr);
 R_API int r_bin_lang_type(RBinFile *binfile, const char *def, const char *sym);
 R_API bool r_bin_lang_objc(RBinFile *binfile);
 R_API bool r_bin_lang_swift(RBinFile *binfile);
@@ -658,6 +675,8 @@ extern RBinPlugin r_bin_plugin_vsf;
 extern RBinPlugin r_bin_plugin_dyldcache;
 extern RBinPlugin r_bin_plugin_avr;
 extern RBinPlugin r_bin_plugin_menuet;
+extern RBinPlugin r_bin_plugin_wasm;
+extern RBinPlugin r_bin_plugin_nro;
 
 #ifdef __cplusplus
 }

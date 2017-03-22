@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2007-2016 - pancake */
+/* radare - LGPL - Copyright 2007-2017 - pancake */
 
 #include "r_types.h"
 #include "r_util.h"
@@ -11,6 +11,9 @@
 #include <fcntl.h>
 #if __UNIX__
 #include <sys/mman.h>
+#endif
+#if __APPLE__
+#include <copyfile.h>
 #endif
 
 R_API bool r_file_truncate (const char *filename, ut64 newsize) {
@@ -282,7 +285,7 @@ R_API char *r_file_slurp(const char *str, int *usz) {
 		fclose (fd);
 		return NULL;
 	}
-	fseek (fd, 0, SEEK_SET);
+	(void)fseek (fd, 0, SEEK_SET);
 	ret = (char *)calloc (sz + 1, 1);
 	if (!ret) {
 		fclose (fd);
@@ -409,6 +412,8 @@ R_API char *r_file_slurp_random_line_count(const char *file, int *line) {
 		srand (getpid() + tv.tv_usec);
 		for (i = 0; str[i]; i++) {
 			if (str[i] == '\n') {
+				//here rand doesn't have any security implication
+				// https://www.securecoding.cert.org/confluence/display/c/MSC30-C.+Do+not+use+the+rand()+function+for+generating+pseudorandom+numbers
 				if (!(rand() % (++(*line)))) {
 					selection = (*line - 1);  /* The line we want. */
 				}
@@ -489,6 +494,37 @@ R_API char *r_file_root(const char *root, const char *path) {
 	ret = r_str_concat (ret, s);
 	free (s);
 	return ret;
+}
+
+R_API bool r_file_hexdump(const char *file, const ut8 *buf, int len, int append) {
+	FILE *fd;
+	int i,j;
+	if (!file || !*file || !buf || len < 0) {
+		eprintf ("r_file_hexdump file: %s buf: %p\n", file, buf);
+		return false;
+	}
+	if (append) {
+		fd = r_sandbox_fopen (file, "awb");
+	} else {
+		r_sys_truncate (file, 0);
+		fd = r_sandbox_fopen (file, "wb");
+	}
+	if (!fd) {
+		eprintf ("Cannot open '%s' for writing\n", file);
+		return false;
+	}
+	for (i = 0; i< len; i+= 16) {
+		fprintf (fd, "0x%08"PFMT64x"  ", (ut64)i);
+		for (j = 0; j<16; j+=2) {
+			fprintf (fd, "%02x%02x ", buf[i +j], buf[i+j+1]);
+		}
+		for (j = 0; j < 16; j++) {
+			fprintf (fd, "%c", IS_PRINTABLE (buf[i + j])? buf[i+j]: '.');
+		}
+		fprintf (fd, "\n");
+	}
+	fclose (fd);
+	return true;
 }
 
 R_API bool r_file_dump(const char *file, const ut8 *buf, int len, int append) {
@@ -778,7 +814,7 @@ R_API char *r_file_temp (const char *prefix) {
 	return name;
 }
 
-R_API int r_file_mkstemp (const char *prefix, char **oname) {
+R_API int r_file_mkstemp(const char *prefix, char **oname) {
 	int h;
 	char *path = r_file_tmpdir ();
 	char name[1024];
@@ -828,7 +864,9 @@ R_API char *r_file_tmpdir() {
 R_API bool r_file_copy (const char *src, const char *dst) {
 	/* TODO: implement in C */
 	/* TODO: Use NO_CACHE for iOS dyldcache copying */
-#if __WINDOWS__
+#if __APPLE__
+	return copyfile (src, dst, 0, 0) != -1;
+#elif __WINDOWS__
 	return r_sys_cmdf ("copy %s %s", src, dst);
 #else
 	char *src2 = r_str_replace (strdup (src), "'", "\\'", 1);

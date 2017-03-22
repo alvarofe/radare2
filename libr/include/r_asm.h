@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2015 - nibble, pancake */
+/* radare - LGPL - Copyright 2009-2017 - nibble, pancake */
 
 #ifndef R2_ASM_H
 #define R2_ASM_H
@@ -45,7 +45,7 @@ R_LIB_VERSION_HEADER(r_asm);
 
 #define R_ASM_GET_NAME(x,y,z) \
 	(x && x->binb.bin && x->binb.get_name)? \
-		x->binb.get_name (x->binb.bin, y, z): NULL 
+		x->binb.get_name (x->binb.bin, y, z): NULL
 
 enum {
 	R_ASM_SYNTAX_NONE = 0,
@@ -118,6 +118,8 @@ typedef int (*RAsmModifyCallback)(RAsm *a, ut8 *buf, int field, ut64 val);
 typedef struct r_asm_plugin_t {
 	const char *name;
 	const char *arch;
+	const char *author;
+	const char *version;
 	const char *cpus;
 	const char *desc;
 	const char *license;
@@ -160,13 +162,16 @@ R_API int r_asm_assemble(RAsm *a, RAsmOp *op, const char *buf);
 R_API RAsmCode* r_asm_mdisassemble(RAsm *a, const ut8 *buf, int len);
 R_API RAsmCode* r_asm_mdisassemble_hexstr(RAsm *a, const char *hexstr);
 R_API RAsmCode* r_asm_massemble(RAsm *a, const char *buf);
+R_API RAsmCode* r_asm_rasm_assemble(RAsm *a, const char *buf, bool use_spp);
 R_API RAsmCode* r_asm_assemble_file(RAsm *a, const char *file);
 R_API char *r_asm_to_string(RAsm *a, ut64 addr, const ut8 *b, int l);
+/* to ease the use of the native bindings (not used in r2) */
 R_API ut8 *r_asm_from_string(RAsm *a, ut64 addr, const char *b, int *l);
 R_API int r_asm_filter_input(RAsm *a, const char *f);
 R_API int r_asm_filter_output(RAsm *a, const char *f);
 R_API char *r_asm_describe(RAsm *a, const char* str);
 R_API RList* r_asm_get_plugins(RAsm *a);
+R_API void r_asm_list_directives(void);
 
 /* code.c */
 R_API RAsmCode *r_asm_code_new(void);
@@ -187,7 +192,6 @@ extern RAsmPlugin r_asm_plugin_mips_cs;
 extern RAsmPlugin r_asm_plugin_x86_udis;
 extern RAsmPlugin r_asm_plugin_x86_as;
 extern RAsmPlugin r_asm_plugin_x86_nz;
-extern RAsmPlugin r_asm_plugin_x86_olly;
 extern RAsmPlugin r_asm_plugin_x86_nasm;
 extern RAsmPlugin r_asm_plugin_x86_cs;
 extern RAsmPlugin r_asm_plugin_arm_gnu;
@@ -241,6 +245,8 @@ extern RAsmPlugin r_asm_plugin_xtensa;
 extern RAsmPlugin r_asm_plugin_tricore;
 extern RAsmPlugin r_asm_plugin_pic18c;
 extern RAsmPlugin r_asm_plugin_rsp;
+extern RAsmPlugin r_asm_plugin_wasm;
+
 #endif
 
 #ifdef __cplusplus

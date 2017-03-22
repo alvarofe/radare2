@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2016 - pancake */
+/* radare - LGPL - Copyright 2009-2017 - pancake */
 
 #include "r_types.h"
 #include "r_config.h"
@@ -16,6 +16,17 @@ static void __init_seek_line (RCore *core) {
 	if (r_core_lines_initcache (core, from, to) == -1) {
 		eprintf ("ERROR: \"lines.from\" and \"lines.to\" must be set\n");
 	}
+}
+
+static void printPadded(RCore *core, int pad) {
+	if (pad < 1) {
+		pad = 8;
+	}
+	char *fmt = r_str_newf ("0x%%0%d" PFMT64x, pad);
+	char *off = r_str_newf (fmt, core->offset);
+	r_cons_printf ("%s\n", off);
+	free (off);
+	free (fmt);
 }
 
 static void __get_current_line (RCore *core) {
@@ -83,10 +94,13 @@ R_API int r_core_lines_initcache (RCore *core, ut64 start_addr, ut64 end_addr) {
 		return -1;
 	}
 
+#if 0				//TODO: check this stuff
 	{
 		RIOSection *s = r_io_section_mget_in (core->io, core->offset);
-		baddr = s ? s->offset : r_config_get_i (core->config, "bin.baddr");
+		baddr = s ? s->addr : r_config_get_i (core->config, "bin.baddr");
 	}
+#endif
+	baddr = r_config_get_i (core->config, "bin.baddr");
 
 	line_count = start_addr ? 0 : 1;
 	core->print->lines_cache[0] = start_addr ? 0 : baddr;
@@ -235,9 +249,14 @@ static int cmd_seek(void *data, const char *input) {
 					break;
 				}
 				free (cb.str);
-			} else eprintf ("Usage: sC[?*] comment-grep\n"
-				"sC*        list all comments\n"
-				"sC const   seek to comment matching 'const'\n");
+			} else {
+				const char *help_msg[] = {
+					"Usage:", "sC", "Comment grep",
+					"sC", "*", "List all comments",
+					"sC", " str", "Seek to the first comment matching 'str'",
+					NULL };
+				r_core_cmd_help (core, help_msg);
+			}
 			break;
 		case ' ':
 			r_io_sundo_push (core->io, core->offset, r_print_get_cursor (core->print));
@@ -371,7 +390,11 @@ static int cmd_seek(void *data, const char *input) {
 				int instr_len;
 				ut64 addr = core->offset;
 				int numinstr = n * -1;
-				ret = r_core_asm_bwdis_len (core, &instr_len, &addr, numinstr);
+				if (r_core_prevop_addr (core, core->offset, numinstr, &addr)) {
+					ret = core->offset - addr;
+				} else {
+					ret = r_core_asm_bwdis_len (core, &instr_len, &addr, numinstr);
+				}
 				r_core_seek (core, addr, true);
 				val += ret;
 			} else {
@@ -389,18 +412,18 @@ static int cmd_seek(void *data, const char *input) {
 			break;
 		case 'g': // "sg"
 			{
-			RIOSection *s = r_io_section_vget (core->io, core->offset);
-			if (s) r_core_seek (core, s->vaddr, 1);
-			else r_core_seek (core, 0, 1);
+				RIOSection *s = r_io_section_vget (core->io, core->offset); 
+				if (s) r_core_seek (core, s->vaddr, 1);
+				else r_core_seek (core, 0, 1);
 			}
 			break;
 		case 'G': // "sG"
 			{
-			if (!core->file) break;
-			RIOSection *s = r_io_section_vget (core->io, core->offset);
-			// XXX: this +2 is a hack. must fix gap between sections
-			if (s) r_core_seek (core, s->vaddr+s->size+2, 1);
-			else r_core_seek (core, r_io_desc_size (core->io, core->file->desc), 1);
+				if (!core->file) break;				//broken concept
+				RIOSection *s = r_io_section_vget (core->io, core->offset); 
+				// XXX: this +2 is a hack. must fix gap between sections
+				if (s) r_core_seek (core, s->vaddr+s->size+2, 1);
+				else r_core_seek (core, r_io_desc_size (core->file->desc), 1);
 			}
 			break;
 		case 'l': // "sl"
@@ -448,10 +471,14 @@ static int cmd_seek(void *data, const char *input) {
 			}
 			}
 			break;
+		case ':':
+			printPadded (core, atoi (input + 1));
+			break;
 		case '?': {
 			const char * help_message[] = {
 			"Usage: s", "", " # Seek commands",
 			"s", "", "Print current address",
+			"s:", "pad", "Print current address with N padded zeros (defaults to 8)",
 			"s", " addr", "Seek to address",
 			"s-", "", "Undo seek",
 			"s-", " n", "Seek n bytes backward",

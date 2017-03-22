@@ -641,6 +641,7 @@ static void xtensa_check_stack_op(xtensa_isa isa, xtensa_opcode opcode, xtensa_f
 	// a1 = stack
 	if (dst == 1 && src == 1) {
 		op->val = imm;
+		op->stackptr = -imm;
 		op->stackop = R_ANAL_STACK_INC;
 	}
 }
@@ -1995,7 +1996,7 @@ static char *get_reg_profile(RAnal *anal) {
 	);
 }
 
-struct r_anal_plugin_t r_anal_plugin_xtensa = {
+RAnalPlugin r_anal_plugin_xtensa = {
 	.name = "xtensa",
 	.desc = "Xtensa disassembler",
 	.license = "LGPL3",

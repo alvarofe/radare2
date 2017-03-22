@@ -1,12 +1,27 @@
 #ifndef R2_TYPES_H
 #define R2_TYPES_H
 
+// defines like IS_DIGIT, etc'
+#include "r_util/r_str_util.h"
+
 // TODO: fix this to make it crosscompile-friendly: R_SYS_OSTYPE ?
 /* operating system */
 #undef __BSD__
 #undef __KFBSD__
 #undef __UNIX__
 #undef __WINDOWS__
+
+#ifdef R_NEW
+#undef R_NEW
+#endif
+
+#ifdef R_NEW0
+#undef R_NEW0
+#endif
+
+#ifdef R_FREE
+#undef R_FREE
+#endif
 
 // HACK to fix capstone-android-mips build
 #undef mips
@@ -61,7 +76,7 @@
 #define MINGW32 1
 #endif
 
-#if defined(EMSCRIPTEN) || defined(__linux__) || defined(__APPLE__) || defined(__GNU__) || defined(__ANDROID__) || defined(__QNX__)
+#if defined(EMSCRIPTEN) || defined(__linux__) || defined(__APPLE__) || defined(__GNU__) || defined(__ANDROID__) || defined(__QNX__) || defined(__sun)
   #define __BSD__ 0
   #define __UNIX__ 1
 #endif
@@ -69,11 +84,11 @@
   #define __BSD__ 1
   #define __UNIX__ 1
 #endif
-#if __WIN32__ || __CYGWIN__ || MINGW32
+#if __WINDOWS__ || _WIN32 || __CYGWIN__ || MINGW32
   #define __addr_t_defined
   #include <windows.h>
 #endif
-#if __WIN32__ || MINGW32 && !__CYGWIN__
+#if __WINDOWS__ || _WIN32 || MINGW32 && !(__MINGW64__ || __CYGWIN__)
   #include <winsock.h>
   typedef int socklen_t;
   #undef USE_SOCKETS
@@ -216,13 +231,9 @@ typedef void (*PrintfCallback)(const char *str, ...);
 #define R_NEW(x) (x*)malloc(sizeof(x))
 // TODO: Make R_NEW_COPY be 1 arg, not two
 #define R_NEW_COPY(x,y) x=(void*)malloc(sizeof(y));memcpy(x,y,sizeof(y))
-#define IS_PRINTABLE(x) (x>=' '&&x<='~')
-#define IS_NUMBER(x) (x>='0'&&x<='9')
-#define IS_WHITESPACE(x) (x==' '||x=='\t')
-#define IS_UPPER(c) ((c) >= 'A' && (c) <= 'Z')
-#define IS_LOWER(c) ((c) >= 'a' && (c) <= 'z')
 #define R_MEM_ALIGN(x) ((void *)(size_t)(((ut64)(size_t)x) & 0xfffffffffffff000LL))
 #define R_ARRAY_SIZE(x) (sizeof (x) / sizeof (x[0]))
+#define R_PTR_MOVE(d,s) d=s;s=NULL;
 
 #define R_PTR_ALIGN(v,t) \
 	((char *)(((size_t)(v) ) \
@@ -269,7 +280,12 @@ typedef void (*PrintfCallback)(const char *str, ...);
 
 #ifndef HAVE_EPRINTF
 #define eprintf(x,y...) fprintf(stderr,x,##y)
+#define eprint(x) fprintf(stderr,"%s\n",x)
 #define HAVE_EPRINTF 1
+#endif
+
+#ifndef typeof
+#define typeof(arg) __typeof__(arg)
 #endif
 
 #define r_offsetof(type, member) ((unsigned long) &((type*)0)->member)
@@ -301,12 +317,21 @@ typedef void (*PrintfCallback)(const char *str, ...);
 #define PFMT64d "I64d"
 #define PFMT64u "I64u"
 #define PFMT64o "I64o"
+#define LDBLFMT "f"
+#define HHXFMT  "x"
 #else
 #define PFMT64x "llx"
 #define PFMT64d "lld"
 #define PFMT64u "llu"
 #define PFMT64o "llo"
+#define LDBLFMT "Lf"
+#define HHXFMT  "hhx"
 #endif
+
+#define PFMT32x "x"
+#define PFMT32d "d"
+#define PFMT32u "u"
+#define PFMT32o "o"
 
 #ifndef O_BINARY
 #define O_BINARY 0
@@ -355,6 +380,10 @@ typedef void (*PrintfCallback)(const char *str, ...);
 #elif __mips__
 #define R_SYS_ARCH "mips"
 #define R_SYS_BITS R_SYS_BITS_32
+#elif __EMSCRIPTEN__
+/* we should default to wasm when ready */
+#define R_SYS_ARCH "x86"
+#define R_SYS_BITS R_SYS_BITS_32
 #else
 #define R_SYS_ARCH "unknown"
 #define R_SYS_BITS R_SYS_BITS_32
@@ -394,11 +423,11 @@ enum {
 	R_SYS_ARCH_SYSZ = 0x1000000,
 	R_SYS_ARCH_XCORE = 0x2000000,
 	R_SYS_ARCH_PROPELLER = 0x4000000,
-	R_SYS_ARCH_MSP430 = 0x8000000, // 1<<27
-	R_SYS_ARCH_CRIS =  0x10000000, // 1<<28
-	R_SYS_ARCH_HPPA =  0x20000000, // 1<<29
-	R_SYS_ARCH_V810 =  0x40000000, // 1<<30
-	R_SYS_ARCH_LM32 =  0x80000000, // 1<<31
+	R_SYS_ARCH_MSP430 = 0x8000000LL, // 1<<27
+	R_SYS_ARCH_CRIS =  0x10000000LL, // 1<<28
+	R_SYS_ARCH_HPPA =  0x20000000LL, // 1<<29
+	R_SYS_ARCH_V810 =  0x40000000LL, // 1<<30
+	R_SYS_ARCH_LM32 =  0x80000000LL, // 1<<31
 };
 
 /* os */
@@ -410,7 +439,7 @@ enum {
 #define R_SYS_OS "darwin"
 #elif defined (__linux__)
 #define R_SYS_OS "linux"
-#elif defined (__WIN32__) || defined (__CYGWIN__) || defined (MINGW32)
+#elif defined (__WINDOWS__) || defined (__CYGWIN__) || defined (MINGW32)
 #define R_SYS_OS "windows"
 #elif defined (__NetBSD__ )
 #define R_SYS_OS "netbsd"

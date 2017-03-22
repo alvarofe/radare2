@@ -12,6 +12,8 @@ https://en.wikipedia.org/wiki/Atmel_AVR_instruction_set
 #include <r_asm.h>
 #include <r_anal.h>
 
+static RDESContext desctx;
+
 typedef struct _cpu_const_tag {
 	const char *const key;
 	ut8 type;
@@ -28,9 +30,7 @@ typedef struct _cpu_model_tag {
 	int pc;
 	char *inherit;
 	struct _cpu_model_tag *inherit_cpu_p;
-	union {
-		CPU_CONST *consts[10];
-	} u;
+	CPU_CONST *consts[10];
 } CPU_MODEL;
 
 typedef void (*inst_handler_t) (RAnal *anal, RAnalOp *op, const ut8 *buf, int *fail, CPU_MODEL *cpu);
@@ -97,18 +97,18 @@ CPU_CONST cpu_memsize_m640_m1280m_m1281_m2560_m2561[] = {
 };
 
 CPU_CONST cpu_pagesize_5_bits[] = {
-	{ "page_size", CPU_CONST_PARAM, 32, sizeof (ut8) },
+	{ "page_size", CPU_CONST_PARAM, 5, sizeof (ut8) },
 	{ NULL, 0, 0, 0 },
 };
 
 CPU_CONST cpu_pagesize_7_bits[] = {
-	{ "page_size", CPU_CONST_PARAM, 128, sizeof (ut8) },
+	{ "page_size", CPU_CONST_PARAM, 7, sizeof (ut8) },
 	{ NULL, 0, 0, 0 },
 };
 
 CPU_MODEL cpu_models[] = {
 	{ .model = "ATmega640",   .pc = 15,
-		.u.consts = {
+		.consts = {
 			cpu_reg_common,
 			cpu_memsize_m640_m1280m_m1281_m2560_m2561,
 			cpu_pagesize_7_bits,
@@ -124,7 +124,7 @@ CPU_MODEL cpu_models[] = {
 	// last model is the default AVR - ATmega8 forever!
 	{
 		.model = "ATmega8", .pc = 13,
-		.u.consts = {
+		.consts = {
 			cpu_reg_common,
 			cpu_memsize_common,
 			cpu_pagesize_5_bits,
@@ -176,7 +176,7 @@ static ut32 const_get_value(CPU_CONST *c) {
 static CPU_CONST *const_by_name(CPU_MODEL *cpu, int type, char *c) {
 	CPU_CONST **clist, *citem;
 
-	for (clist = cpu->u.consts; *clist; clist++) {
+	for (clist = cpu->consts; *clist; clist++) {
 		for (citem = *clist; citem->key; citem++) {
 			if (!strcmp (c, citem->key)
 			&& (type == CPU_CONST_NONE || type == citem->type)) {
@@ -203,7 +203,7 @@ static int __esil_pop_argument(RAnalEsil *esil, ut64 *v) {
 static CPU_CONST *const_by_value(CPU_MODEL *cpu, int type, ut32 v) {
 	CPU_CONST **clist, *citem;
 
-	for (clist = cpu->u.consts; *clist; clist++) {
+	for (clist = cpu->consts; *clist; clist++) {
 		for (citem = *clist; citem && citem->key; citem++) {
 			if (citem->value == (MASK (citem->size * 8) & v)
 			&& (type == CPU_CONST_NONE || type == citem->type)) {
@@ -286,60 +286,109 @@ static void __generic_push(RAnalOp *op, int sz) {
 	ESIL_A ("-%d,sp,+=,", sz);		// decrement stack pointer
 }
 
+static void __generic_add_update_flags(RAnalOp *op, char t_d, ut64 v_d, char t_rk, ut64 v_rk) {
+	RStrBuf *d_strbuf, *rk_strbuf;
+	char *d, *rk;
+
+	d_strbuf = r_strbuf_new (NULL);
+	rk_strbuf = r_strbuf_new (NULL);
+	r_strbuf_setf (d_strbuf,  t_d  == 'r' ? "r%d" : "%" PFMT64x, v_d);
+	r_strbuf_setf (rk_strbuf, t_rk == 'r' ? "r%d" : "%" PFMT64x, v_rk);
+
+	d = r_strbuf_get(d_strbuf);
+	rk = r_strbuf_get(rk_strbuf);
+
+	ESIL_A ("%s,0x08,&,!,!," "%s,0x08,&,!,!,"    "&,"	// H
+		"%s,0x08,&,!,!," "0,RPICK,0x08,&,!," "&,"
+		"%s,0x08,&,!,!," "0,RPICK,0x08,&,!," "&,"
+		"|,|,hf,=,",
+		d, rk, rk, d);
+	ESIL_A ("%s,0x80,&,!,!," "%s,0x80,&,!,!,"      "&,"	// V
+		""               "0,RPICK,0x80,&,!,"   "&,"
+		"%s,0x80,&,!,"   "%s,0x80,&,!,"        "&,"
+		""               "0,RPICK,0x80,&,!,!," "&,"
+		"|,vf,=,",
+		d, rk, d, rk);
+	ESIL_A ("0,RPICK,0x80,&,!,!,nf,=,");			// N
+	ESIL_A ("0,RPICK,!,zf,=,");				// Z
+	ESIL_A ("%s,0x80,&,!,!," "%s,0x80,&,!,!,"    "&,"	// C
+		"%s,0x80,&,!,!," "0,RPICK,0x80,&,!," "&,"
+		"%s,0x80,&,!,!," "0,RPICK,0x80,&,!," "&,"
+		"|,|,cf,=,",
+		d, rk, rk, d);
+	ESIL_A ("vf,nf,^,sf,=,");				// S
+
+	r_strbuf_free (d_strbuf);
+	r_strbuf_free (rk_strbuf);
+}
+
+static void __generic_add_update_flags_rr(RAnalOp *op, int d, int r) {
+	__generic_add_update_flags(op, 'r', d, 'r', r);
+}
+
+static void __generic_sub_update_flags(RAnalOp *op, char t_d, ut64 v_d, char t_rk, ut64 v_rk, int carry) {
+	RStrBuf *d_strbuf, *rk_strbuf;
+	char *d, *rk;
+
+	d_strbuf = r_strbuf_new (NULL);
+	rk_strbuf = r_strbuf_new (NULL);
+	r_strbuf_setf (d_strbuf,  t_d  == 'r' ? "r%d" : "%" PFMT64x, v_d);
+	r_strbuf_setf (rk_strbuf, t_rk == 'r' ? "r%d" : "%" PFMT64x, v_rk);
+
+	d = r_strbuf_get(d_strbuf);
+	rk = r_strbuf_get(rk_strbuf);
+
+	ESIL_A ("%s,0x08,&,!,"   "%s,0x08,&,!,!,"      "&,"	// H
+		"%s,0x08,&,!,!," "0,RPICK,0x08,&,!,!," "&,"
+		"%s,0x08,&,!,"   "0,RPICK,0x08,&,!,!," "&,"
+		"|,|,hf,=,",
+		d, rk, rk, d);
+	ESIL_A ("%s,0x80,&,!,!," "%s,0x80,&,!,"        "&,"	// V
+		""               "0,RPICK,0x80,&,!,"   "&,"
+		"%s,0x80,&,!,"   "%s,0x80,&,!,!,"      "&,"
+		""               "0,RPICK,0x80,&,!,!," "&,"
+		"|,vf,=,",
+		d, rk, d, rk);
+	ESIL_A ("0,RPICK,0x80,&,!,!,nf,=,");			// N
+	if (carry)
+		ESIL_A ("0,RPICK,!,zf,&,zf,=,");		// Z
+	else
+		ESIL_A ("0,RPICK,!,zf,=,");			// Z
+	ESIL_A ("%s,0x80,&,!,"   "%s,0x80,&,!,!,"      "&,"	// C
+		"%s,0x80,&,!,!," "0,RPICK,0x80,&,!,!," "&,"
+		"%s,0x80,&,!,"   "0,RPICK,0x80,&,!,!," "&,"
+		"|,|,cf,=,",
+		d, rk, rk, d);
+	ESIL_A ("vf,nf,^,sf,=,");				// S
+
+	r_strbuf_free (d_strbuf);
+	r_strbuf_free (rk_strbuf);
+}
+
+static void __generic_sub_update_flags_rr(RAnalOp *op, int d, int r, int carry) {
+	__generic_sub_update_flags(op, 'r', d, 'r', r, carry);
+}
+
+static void __generic_sub_update_flags_rk(RAnalOp *op, int d, int k, int carry) {
+	__generic_sub_update_flags(op, 'r', d, 'k', k, carry);
+}
+
 INST_HANDLER (adc) {	// ADC Rd, Rr
 			// ROL Rd
 	int d = ((buf[0] >> 4) & 0xf) | ((buf[1] & 1) << 4);
 	int r = (buf[0] & 0xf) | ((buf[1] & 2) << 3);
-	ESIL_A ("r%d,cf,+,r%d,+,", r, d);			// Rd + Rr + C
-								// FLAGS:
-	ESIL_A ("r%d,0x08,&,!,!," "r%d,0x08,&,!,!,"     "&,"	// H
-		"r%d,0x08,&,!,!," "0,RPICK,0x08,&,!,"   "&,"
-		"r%d,0x08,&,!,!," "0,RPICK,0x08,&,!,"   "&,"
-		"|,|,hf,=,",
-		d, r, r, d);
-	ESIL_A ("r%d,0x80,&,!,!," "r%d,0x80,&,!,!,"     "&,"	// V
-		""                "0,RPICK,0x80,&,!,"   "&,"
-		"r%d,0x80,&,!,"   "r%d,0x80,&,!,"       "&,"
-		""                "0,RPICK,0x80,&,!,!," "&,"
-		"|,vf,=,",
-		d, r, d, r);
-	ESIL_A ("0,RPICK,0x80,&,!,!,nf,=,");			// N
-	ESIL_A ("0,RPICK,!,zf,=,");				// Z
-	ESIL_A ("r%d,0x80,&,!,!," "r%d,0x80,&,!,!,"     "&," 	// C
-		"r%d,0x80,&,!,!," "0,RPICK,0x80,&,!,"   "&,"
-		"r%d,0x80,&,!,!," "0,RPICK,0x80,&,!,"   "&,"
-		"|,|,cf,=,",
-		d, r, r, d);
-	ESIL_A ("vf,nf,^,sf,=,");				// S
-	ESIL_A ("r%d,=,", d);					// Rd = result
+	ESIL_A ("r%d,cf,+,r%d,+,", r, d);		// Rd + Rr + C
+	__generic_add_update_flags_rr(op, d, r);	// FLAGS
+	ESIL_A ("r%d,=,", d);				// Rd = result
 }
 
 INST_HANDLER (add) {	// ADD Rd, Rr
 			// LSL Rd
 	int d = ((buf[0] >> 4) & 0xf) | ((buf[1] & 1) << 4);
 	int r = (buf[0] & 0xf) | ((buf[1] & 2) << 3);
-	ESIL_A ("r%d,r%d,+,", r, d);				// Rd + Rr
-								// FLAGS:
-	ESIL_A ("r%d,0x08,&,!,!," "r%d,0x08,&,!,!,"     "&,"	// H
-		"r%d,0x08,&,!,!," "0,RPICK,0x08,&,!,"   "&,"
-		"r%d,0x08,&,!,!," "0,RPICK,0x08,&,!,"   "&,"
-		"|,|,hf,=,",
-		d, r, r, d);
-	ESIL_A ("r%d,0x80,&,!,!," "r%d,0x80,&,!,!,"     "&,"	// V
-		""                "0,RPICK,0x80,&,!,"   "&,"
-		"r%d,0x80,&,!,"   "r%d,0x80,&,!,"       "&,"
-		""                "0,RPICK,0x80,&,!,!," "&,"
-		"|,vf,=,",
-		d, r, d, r);
-	ESIL_A ("0,RPICK,0x80,&,!,!,nf,=,");			// N
-	ESIL_A ("0,RPICK,!,zf,=,");				// Z
-	ESIL_A ("r%d,0x80,&,!,!," "r%d,0x80,&,!,!,"     "&," 	// C
-		"r%d,0x80,&,!,!," "0,RPICK,0x80,&,!,"   "&,"
-		"r%d,0x80,&,!,!," "0,RPICK,0x80,&,!,"   "&,"
-		"|,|,cf,=,",
-		d, r, r, d);
-	ESIL_A ("vf,nf,^,sf,=,");				// S
-	ESIL_A ("r%d,=,", d);					// Rd = result
+	ESIL_A ("r%d,r%d,+,", r, d);			// Rd + Rr
+	__generic_add_update_flags_rr(op, d, r);	// FLAGS
+	ESIL_A ("r%d,=,", d);				// Rd = result
 }
 
 INST_HANDLER (adiw) {	// ADIW Rd+1:Rd, K
@@ -509,79 +558,23 @@ INST_HANDLER (com) {	// COM Rd
 INST_HANDLER (cp) {	// CP Rd, Rr
 	int r = (buf[0]        & 0x0f) | ((buf[1] << 3) & 0x10);
 	int d = ((buf[0] >> 4) & 0x0f) | ((buf[1] << 4) & 0x10);
-	ESIL_A ("r%d,r%d,-,", r, d);				// do Rd - Rr
-								// FLAGS:
-	ESIL_A ("r%d,0x08,&,!,"   "r%d,0x08,&,!,!,"     "&,"	// H
-		"r%d,0x08,&,!,!," "0,RPICK,0x08,&,!,!," "&,"
-		"r%d,0x08,&,!,"   "0,RPICK,0x08,&,!,!," "&,"
-		"|,|,hf,=,",
-		d, r, d, r);
-	ESIL_A ("r%d,0x80,&,!,!," "r%d,0x80,&,!,"       "&,"	// V
-		""                "0,RPICK,0x80,&,!,"   "&,"
-		"r%d,0x80,&,!,"   "r%d,0x80,&,!,!,"     "&,"
-		""                "0,RPICK,0x80,&,!,!," "&,"
-		"|,vf,=,",
-		d, r, d, r);
-	ESIL_A ("0,RPICK,0x80,&,!,!,nf,=,");			// N
-	ESIL_A ("0,RPICK,!,zf,=,");				// Z
-	ESIL_A ("r%d,0x80,&,!,"   "r%d,0x80,&,!,!,"     "&," 	// C
-		"r%d,0x80,&,!,!," "0,RPICK,0x80,&,!,!," "&,"
-		"r%d,0x80,&,!,"   "0,RPICK,0x80,&,!,!," "&,"
-		"|,|,cf,=,",
-		d, r, d, r);
-	ESIL_A ("vf,nf,^,sf,=,");				// S
+	ESIL_A ("r%d,r%d,-,", r, d);			// do Rd - Rr
+	__generic_sub_update_flags_rr (op, d, r, 0);	// FLAGS (no carry)
 }
 
 INST_HANDLER (cpc) {	// CPC Rd, Rr
 	int r = (buf[0]        & 0x0f) | ((buf[1] << 3) & 0x10);
 	int d = ((buf[0] >> 4) & 0x0f) | ((buf[1] << 4) & 0x10);
-	ESIL_A ("cf,r%d,-,r%d,-,", r, d);			// Rd - Rr - C
-								// FLAGS:
-	ESIL_A ("r%d,0x08,&,!,"   "r%d,0x08,&,!,!,"     "&,"	// H
-		"r%d,0x08,&,!,!," "0,RPICK,0x08,&,!,!," "&,"
-		"r%d,0x08,&,!,"   "0,RPICK,0x08,&,!,!," "&,"
-		"|,|,hf,=,",
-		d, r, d, r);
-	ESIL_A ("r%d,0x80,&,!,!," "r%d,0x80,&,!,"       "&,"	// V
-		""                "0,RPICK,0x80,&,!,"   "&,"
-		"r%d,0x80,&,!,"   "r%d,0x80,&,!,!,"     "&,"
-		""                "0,RPICK,0x80,&,!,!," "&,"
-		"|,vf,=,",
-		d, r, d, r);
-	ESIL_A ("0,RPICK,0x80,&,!,!,nf,=,");			// N
-	ESIL_A ("0,RPICK,!,zf,&,zf,=,");			// Z
-	ESIL_A ("r%d,0x80,&,!,"   "r%d,0x80,&,!,!,"     "&," 	// C
-		"r%d,0x80,&,!,!," "0,RPICK,0x80,&,!,!," "&,"
-		"r%d,0x80,&,!,"   "0,RPICK,0x80,&,!,!," "&,"
-		"|,|,cf,=,",
-		d, r, r, d);
-	ESIL_A ("vf,nf,^,sf,=,");				// S
+
+	ESIL_A ("cf,r%d,-,r%d,-,", r, d);		// Rd - Rr - C
+	__generic_sub_update_flags_rr (op, d, r, 1);	// FLAGS (carry)
 }
 
 INST_HANDLER (cpi) { // CPI Rd, K
 	int d = ((buf[0] >> 4) & 0xf) + 16;
 	int k = (buf[0] & 0xf) | ((buf[1] & 0xf) << 4);
-	ESIL_A ("%d,r%d,-,", k, d);				// Rd - k
-								// FLAGS:
-	ESIL_A ("r%d,0x08,&,!,"   "%d,0x08,&,!,!,"     "&,"	// H
-		"r%d,0x08,&,!,!," "0,RPICK,0x08,&,!,!," "&,"
-		"%d,0x08,&,!,"   "0,RPICK,0x08,&,!,!," "&,"
-		"|,|,hf,=,",
-		d, k, d, k);
-	ESIL_A ("r%d,0x80,&,!,!," "%d,0x80,&,!,"        "&,"	// V
-		""                "0,RPICK,0x80,&,!,"   "&,"
-		"r%d,0x80,&,!,"   "%d,0x80,&,!,!,"      "&,"
-		""                "0,RPICK,0x80,&,!,!," "&,"
-		"|,vf,=,",
-		d, k, d, k);
-	ESIL_A ("0,RPICK,0x80,&,!,!,nf,=,");			// N
-	ESIL_A ("0,RPICK,!,zf,=,");				// Z
-	ESIL_A ("r%d,0x80,&,!,"  "%d,0x80,&,!,!,"      "&," 	// C
-		"%d,0x80,&,!,!," "0,RPICK,0x80,&,!,!," "&,"
-		"r%d,0x80,&,!,"  "0,RPICK,0x80,&,!,!," "&,"
-		"|,|,cf,=,",
-		d, k, k, d);
-	ESIL_A ("vf,nf,^,sf,=,");				// S
+	ESIL_A ("%d,r%d,-,", k, d);			// Rd - k
+	__generic_sub_update_flags_rr (op, d, k, 0);	// FLAGS (carry)
 }
 
 INST_HANDLER (cpse) {	// CPSE Rd, Rr
@@ -620,11 +613,11 @@ INST_HANDLER (dec) {	// DEC Rd
 }
 
 INST_HANDLER (des) {	// DES k
-//if (d < 16) {	//DES
-//	op->type = R_ANAL_OP_TYPE_CRYPTO;
-//	op->cycles = 1;		//redo this
-//	r_strbuf_setf (&op->esil, "%d,des", d);
-//}
+	if (desctx.round < 16) {	//DES
+		op->type = R_ANAL_OP_TYPE_CRYPTO;
+		op->cycles = 1;		//redo this
+		r_strbuf_setf (&op->esil, "%d,des", desctx.round);
+	}
 }
 
 INST_HANDLER (eijmp) {	// EIJMP
@@ -634,9 +627,9 @@ INST_HANDLER (eijmp) {	// EIJMP
 	r_anal_esil_reg_read (anal->esil, "eind", &eind, NULL);
 	// real target address may change during execution, so this value will
 	// be changing all the time
-	op->jump = (eind << 16) + z;
+	op->jump = ((eind << 16) + z) << 1;
 	// jump
-	ESIL_A ("z,16,eind,<<,+,pc,=,");
+	ESIL_A ("1,z,16,eind,<<,+,<<,pc,=,");
 	// cycles
 	op->cycles = 2;
 }
@@ -718,33 +711,29 @@ INST_HANDLER (fmulsu) {	// FMULSU Rd, Rr
 	ESIL_A ("DUP,!,zf,=,");				// Z = !R
 }
 
-INST_HANDLER (icall) {	// ICALL k
-	ut64 z;
-	// read z for calculating jump address on runtime
-	r_anal_esil_reg_read (anal->esil, "z", &z, NULL);
-	// real target address may change during execution, so this value will
-	// be changing all the time
-	op->jump = z;
-	op->cycles = cpu->pc <= 16 ? 3 : 4;
-	if (!STR_BEGINS (cpu->model, "ATxmega")) {
-		// AT*mega optimizes 1 cycle!
-		op->cycles--;
-	}
-	ESIL_A ("pc,");				// esil already points to next
-						// instruction (@ret)
-	__generic_push (op, CPU_PC_SIZE (cpu));	// push @ret addr
-	ESIL_A ("z,pc,=,");			// jump!
-}
-
 INST_HANDLER (ijmp) {	// IJMP k
 	ut64 z;
 	// read z for calculating jump address on runtime
 	r_anal_esil_reg_read (anal->esil, "z", &z, NULL);
 	// real target address may change during execution, so this value will
 	// be changing all the time
-	op->jump = z;
+	op->jump = z << 1;
 	op->cycles = 2;
-	ESIL_A ("z,pc,=,");			// jump!
+	ESIL_A ("1,z,<<,pc,=,");		// jump!
+}
+
+INST_HANDLER (icall) {	// ICALL k
+	// push pc in stack
+	ESIL_A ("pc,");				// esil is already pointing to
+						// next instruction (@ret)
+	__generic_push (op, CPU_PC_SIZE (cpu));	// push @ret in stack
+	// do a standard IJMP
+	INST_CALL (ijmp);
+	// fix cycles
+	if (!STR_BEGINS (cpu->model, "ATxmega")) {
+		// AT*mega optimizes 1 cycle!
+		op->cycles--;
+	}
 }
 
 INST_HANDLER (in) {	// IN Rd, A
@@ -1101,7 +1090,7 @@ INST_HANDLER (reti) {	// RETI
 
 INST_HANDLER (rjmp) {	// RJMP k
 	op->jump = (op->addr
-		+ (((typeof (op->jump)) (((buf[1] & 0xf) << 9) | (buf[0] << 1)))
+		+ ((((( (typeof (op->jump)) buf[1] & 0xf) << 9) | ((typeof (op->jump)) buf[0] << 1)))
 			| (buf[1] & 0x8 ? ~((typeof (op->jump)) 0x1fff) : 0))
 		+ 2) & CPU_PC_MASK (cpu);
 	ESIL_A ("%"PFMT64d",pc,=,", op->jump);
@@ -1121,105 +1110,37 @@ INST_HANDLER (ror) {	// ROR Rd
 INST_HANDLER (sbc) {	// SBC Rd, Rr
 	int r = (buf[1] & 0x0f) | ((buf[0] & 0x2) >> 1);
 	int d = ((buf[1] >> 4) & 0xf) | (buf[0] & 0x1);
-	ESIL_A ("cf,r%d,-,r%d,-,", r, d);			// 0: (Rd-Rr-C)
-	ESIL_A ("r%d,0x08,&,!,"   "r%d,0x08,&,!,!,"     "&,"	// H
-		"r%d,0x08,&,!,!," "0,RPICK,0x08,&,!,!," "&,"
-		"r%d,0x08,&,!,"   "0,RPICK,0x08,&,!,!," "&,"
-		"|,|,hf,=,",
-		d, r, r, d);
-	ESIL_A ("r%d,0x80,&,!,!," "r%d,0x80,&,!,"       "&,"	// V
-		""                "0,RPICK,0x80,&,!,"   "&,"
-		"r%d,0x80,&,!,"   "r%d,0x80,&,!,!,"     "&,"
-		""                "0,RPICK,0x80,&,!,!," "&,"
-		"|,vf,=,",
-		d, r, d, r);
-	ESIL_A ("0,RPICK,0x80,&,!,!,nf,=,");			// N
-	ESIL_A ("0,RPICK,!,zf,&,zf,=,");			// Z (C)
-	ESIL_A ("r%d,0x80,&,!,"   "r%d,0x80,&,!,!,"     "&," 	// C
-		"r%d,0x80,&,!,!," "0,RPICK,0x80,&,!,!," "&,"
-		"r%d,0x80,&,!,"   "0,RPICK,0x80,&,!,!," "&,"
-		"|,|,cf,=,",
-		d, r, r, d);
-	ESIL_A ("vf,nf,^,sf,=,");				// S
-	ESIL_A ("r%d,=,", d);					// Rd = Result
+
+	ESIL_A ("cf,r%d,-,r%d,-,", r, d);		// 0: (Rd-Rr-C)
+	__generic_sub_update_flags_rr (op, d, r, 1);	// FLAGS (carry)
+	ESIL_A ("r%d,=,", d);				// Rd = Result
 }
 
 INST_HANDLER (sbci) {	// SBCI Rd, k
 	int d = ((buf[0] >> 4) & 0xf) + 16;
 	int k = ((buf[1] & 0xf) << 4) | (buf[0] & 0xf);
-	ESIL_A ("cf,%d,+,r%d,-,", k, d);			// 0: (Rd-k-C)
-	ESIL_A ("r%d,0x08,&,!,"  "%d,0x08,&,!,!,"      "&,"	// H
-		"%d,0x08,&,!,!," "0,RPICK,0x08,&,!,!," "&,"
-		"r%d,0x08,&,!,"  "0,RPICK,0x08,&,!,!," "&,"
-		"|,|,hf,=,",
-		d, k, k, d);
-	ESIL_A ("r%d,0x80,&,!,!," "%d,0x80,&,!,"        "&,"	// V
-		""                "0,RPICK,0x80,&,!,"   "&,"
-		"r%d,0x80,&,!,"   "%d,0x80,&,!,!,"      "&,"
-		""                "0,RPICK,0x80,&,!,!," "&,"
-		"|,vf,=,",
-		d, k, d, k);
-	ESIL_A ("0,RPICK,0x80,&,!,!,nf,=,");			// N
-	ESIL_A ("0,RPICK,!,zf,&,zf,=,");			// Z (C)
-	ESIL_A ("r%d,0x80,&,!,"  "%d,0x80,&,!,!,"      "&," 	// C
-		"%d,0x80,&,!,!," "0,RPICK,0x80,&,!,!," "&,"
-		"r%d,0x80,&,!,"  "0,RPICK,0x80,&,!,!," "&,"
-		"|,|,cf,=,",
-		d, k, k, d);
-	ESIL_A ("vf,nf,^,sf,=,");				// S
-	ESIL_A ("r%d,=,", d);					// Rd = Result
+
+	ESIL_A ("cf,%d,+,r%d,-,", k, d);		// 0: (Rd-k-C)
+	__generic_sub_update_flags_rk (op, d, k, 1);	// FLAGS (carry)
+	ESIL_A ("r%d,=,", d);				// Rd = Result
 }
 
 INST_HANDLER (sub) {	// SUB Rd, Rr
 	int d = ((buf[0] >> 4) & 0xf) | ((buf[1] & 1) << 4);
 	int r = (buf[0] & 0xf) | ((buf[1] & 2) << 3);
-	ESIL_A ("r%d,r%d,-,", r, d);				// 0: (Rd-k)
-	ESIL_A ("r%d,0x08,&,!,"   "r%d,0x08,&,!,!,"     "&,"	// H
-		"r%d,0x08,&,!,!," "0,RPICK,0x08,&,!,!," "&,"
-		"r%d,0x08,&,!,"   "0,RPICK,0x08,&,!,!," "&,"
-		"|,|,hf,=,",
-		d, r, r, d);
-	ESIL_A ("r%d,0x80,&,!,!," "r%d,0x80,&,!,"       "&,"	// V
-		""                "0,RPICK,0x80,&,!,"   "&,"
-		"r%d,0x80,&,!,"   "r%d,0x80,&,!,!,"     "&,"
-		""                "0,RPICK,0x80,&,!,!," "&,"
-		"|,vf,=,",
-		d, r, d, r);
-	ESIL_A ("0,RPICK,0x80,&,!,!,nf,=,");			// N
-	ESIL_A ("0,RPICK,!,zf,=,");				// Z
-	ESIL_A ("r%d,0x80,&,!,"   "r%d,0x80,&,!,!,"     "&," 	// C
-		"r%d,0x80,&,!,!," "0,RPICK,0x80,&,!,!," "&,"
-		"r%d,0x80,&,!,"   "0,RPICK,0x80,&,!,!," "&,"
-		"|,|,cf,=,",
-		d, r, r, d);
-	ESIL_A ("vf,nf,^,sf,=,");				// S
-	ESIL_A ("r%d,=,", d);					// Rd = Result
+
+	ESIL_A ("r%d,r%d,-,", r, d);			// 0: (Rd-k)
+	__generic_sub_update_flags_rr (op, d, r, 0);	// FLAGS (no carry)
+	ESIL_A ("r%d,=,", d);				// Rd = Result
 }
 
 INST_HANDLER (subi) {	// SUBI Rd, k
 	int d = ((buf[0] >> 4) & 0xf) + 16;
 	int k = ((buf[1] & 0xf) << 4) | (buf[0] & 0xf);
-	ESIL_A ("%d,r%d,-,", k, d);				// 0: (Rd-k)
-	ESIL_A ("r%d,0x08,&,!,"  "%d,0x08,&,!,!,"      "&,"	// H
-		"%d,0x08,&,!,!," "0,RPICK,0x08,&,!,!," "&,"
-		"r%d,0x08,&,!,"  "0,RPICK,0x08,&,!,!," "&,"
-		"|,|,hf,=,",
-		d, k, k, d);
-	ESIL_A ("r%d,0x80,&,!,!," "%d,0x80,&,!,"        "&,"	// V
-		""                "0,RPICK,0x80,&,!,"   "&,"
-		"r%d,0x80,&,!,"   "%d,0x80,&,!,!,"      "&,"
-		""                "0,RPICK,0x80,&,!,!," "&,"
-		"|,vf,=,",
-		d, k, d, k);
-	ESIL_A ("0,RPICK,0x80,&,!,!,nf,=,");			// N
-	ESIL_A ("0,RPICK,!,zf,=,");				// Z
-	ESIL_A ("r%d,0x80,&,!,"  "%d,0x80,&,!,!,"      "&," 	// C
-		"%d,0x80,&,!,!," "0,RPICK,0x80,&,!,!," "&,"
-		"r%d,0x80,&,!,"  "0,RPICK,0x80,&,!,!," "&,"
-		"|,|,cf,=,",
-		d, k, k, d);
-	ESIL_A ("vf,nf,^,sf,=,");				// S
-	ESIL_A ("r%d,=,", d);					// Rd = Result
+
+	ESIL_A ("%d,r%d,-,", k, d);			// 0: (Rd-k)
+	__generic_sub_update_flags_rk (op, d, k, 1);	// FLAGS (no carry)
+	ESIL_A ("r%d,=,", d);				// Rd = Result
 }
 
 INST_HANDLER (sbi) {	// SBI A, b
@@ -1645,21 +1566,50 @@ static int avr_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *buf, int len) 
 }
 
 static int avr_custom_des (RAnalEsil *esil) {
-	ut64 key, text;
-	int r, enc;
+	ut64 key, encrypt, text,des_round;
+	ut32 key_lo, key_hi, buf_lo, buf_hi;
 	if (!esil || !esil->anal || !esil->anal->reg) {
 		return false;
 	}
-	if (!__esil_pop_argument(esil, &key)) {
+	if (!__esil_pop_argument (esil, &des_round)) {
 		return false;
 	}
-	r = (int)key;
-	r_anal_esil_reg_read (esil, "hf", &key, NULL);
-	enc = (int)key;
+	r_anal_esil_reg_read (esil, "hf", &encrypt, NULL);
 	r_anal_esil_reg_read (esil, "deskey", &key, NULL);
 	r_anal_esil_reg_read (esil, "text", &text, NULL);
-	key = r_des_get_roundkey (key, r, enc);
-	text = r_des_round (text, key);
+
+	key_lo = key & UT32_MAX;
+	key_hi = key >> 32;
+	buf_lo = text & UT32_MAX;
+	buf_hi = text >> 32;
+
+	if (des_round != desctx.round) {
+		desctx.round = des_round;
+	}
+	
+	if (!desctx.round) {
+		int i;
+		//generating all round keys
+		r_des_permute_key (&key_lo, &key_hi);
+		for (i = 0; i < 16; i++) {
+			r_des_round_key (i, &desctx.round_key_lo[i], &desctx.round_key_hi[i], &key_lo, &key_hi);
+		}
+		r_des_permute_block0 (&buf_lo, &buf_hi);
+	}
+
+	if (encrypt) {
+		r_des_round (&buf_lo, &buf_hi, &desctx.round_key_lo[desctx.round], &desctx.round_key_hi[desctx.round]);
+	} else {
+		r_des_round (&buf_lo, &buf_hi, &desctx.round_key_lo[15 - desctx.round], &desctx.round_key_hi[15 - desctx.round]);
+	}
+
+	if (desctx.round == 15) {
+		r_des_permute_block1 (&buf_hi, &buf_lo);
+		desctx.round = 0;
+	} else {
+		desctx.round++;
+	}
+
 	r_anal_esil_reg_write (esil, "text", text);
 	return true;
 }
@@ -1744,14 +1694,17 @@ static int avr_custom_spm_page_write(RAnalEsil *esil) {
 	CPU_MODEL *cpu;
 	char *t = NULL;
 	ut64 addr, page_size_bits, tmp_page;
+
 	// sanity check
 	if (!esil || !esil->anal || !esil->anal->reg) {
 		return false;
 	}
+
 	// get target address
 	if (!__esil_pop_argument (esil, &addr)) {
 		return false;
 	}
+
 	// get details about current MCU and fix input address and base address
 	// of the internal temporary page
 	cpu = get_cpu_model (esil->anal->cpu);
@@ -1794,16 +1747,16 @@ static int esil_avr_hook_reg_write(RAnalEsil *esil, const char *name, ut64 *val)
 		*val = cpu->pc > 8
 			? *val & MASK (cpu->pc - 8)
 			: 0;
-	} else {
-		eprintf ("Modifying register '%s' with value 0x%08"PFMT64x"\n", name, *val);
 	}
 
 	return 0;
 }
 
 static int esil_avr_init(RAnalEsil *esil) {
-	if (!esil)
+	if (!esil) {
 		return false;
+	}
+	desctx.round = 0;
 	r_anal_esil_set_op (esil, "des", avr_custom_des);
 	r_anal_esil_set_op (esil, "SPM_PAGE_ERASE", avr_custom_spm_page_erase);
 	r_anal_esil_set_op (esil, "SPM_PAGE_FILL", avr_custom_spm_page_fill);

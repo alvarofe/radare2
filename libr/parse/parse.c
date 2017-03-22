@@ -137,9 +137,9 @@ static char *findNextNumber(char *op) {
 				bool is_space = ansi_found;
 				ansi_found = false;
 				if (!is_space) {
-					is_space = (p != op && (*o == ' ' || *o == ',' || *o == '['));
+					is_space = (p == op || *o == ' ' || *o == ',' || *o == '[');
 				}
-				if (is_space && *p >= '0' && *p <= '9') {
+				if (is_space && IS_DIGIT(*p)) {
 					return p;
 				}
 				o = p++;
@@ -150,11 +150,12 @@ static char *findNextNumber(char *op) {
 }
 
 static int filter(RParse *p, RFlag *f, char *data, char *str, int len, bool big_endian) {
-	char *ptr = data, *ptr2;
+	char *ptr = data, *ptr2, *ptr_backup;
 	RAnalFunction *fcn;
 	RFlagItem *flag;
 	ut64 off;
 	bool x86 = false;
+	bool computed = false;
 	if (p && p->cur && p->cur->name) {
 		if (strstr (p->cur->name, "x86")) x86 = true;
 		if (strstr (p->cur->name, "m68k")) x86 = true;
@@ -174,7 +175,7 @@ static int filter(RParse *p, RFlag *f, char *data, char *str, int len, bool big_
 		if (x86) {
 			for (ptr2 = ptr; *ptr2 && !isx86separator (*ptr2); ptr2++);
 		} else {
-			for (ptr2 = ptr; *ptr2 && (*ptr2 != ']' && (*ptr2 != '\x1b') && !isseparator (*ptr2)); ptr2++);
+			for (ptr2 = ptr; *ptr2 && (*ptr2 != ']' && (*ptr2 != '\x1b') && !ISSEPARATOR (*ptr2)); ptr2++);
 		}
 		off = r_num_math (NULL, ptr);
 		if (off > 0xff) {
@@ -191,10 +192,23 @@ static int filter(RParse *p, RFlag *f, char *data, char *str, int len, bool big_
 				return true;
 			}
 			if (f) {
+				RFlagItem *flag2;
 				flag = r_flag_get_i2 (f, off);
+				computed = false;
 				if (!flag) {
 					flag = r_flag_get_i (f, off);
 				}
+				if (p->relsub_addr) {
+					computed = true;
+					flag2 = r_flag_get_i2 (f, p->relsub_addr);
+					if (!flag2) {
+						flag2 = r_flag_get_i (f, p->relsub_addr);
+					}
+					if (!flag) {
+						flag = flag2;
+					}
+				}
+
 				if (isvalidflag (flag)) {
 					if (p->notin_flagspace != -1) {
 						if (p->flagspace == flag->space) {
@@ -204,12 +218,22 @@ static int filter(RParse *p, RFlag *f, char *data, char *str, int len, bool big_
 						ptr = ptr2;
 						continue;
 					}
-					*ptr = 0;
 					// hack to realign pointer for colours
 					ptr2--;
 					if (*ptr2 != 0x1b) {
 						ptr2++;
 					}
+					ptr_backup = ptr;
+					if (computed && ptr != ptr2 && *ptr) {
+						if (*ptr2 == ']') {
+							ptr2++;
+							for (ptr--; ptr > data && *ptr != '['; ptr--);
+							if (ptr == data) {
+								ptr = ptr_backup;
+							}
+						}
+					}
+					*ptr = 0;
 					snprintf (str, len, "%s%s%s", data, flag->name,
 							(ptr != ptr2) ? ptr2 : "");
 					return true;
@@ -227,7 +251,7 @@ static int filter(RParse *p, RFlag *f, char *data, char *str, int len, bool big_
 				pnum += 2;
 			}
 			for (; *pnum; pnum++) {
-				if ((is_hex && ishexchar(*pnum)) || IS_NUMBER(*pnum)) {
+				if ((is_hex && ISHEXCHAR(*pnum)) || IS_DIGIT(*pnum)) {
 					continue;
 				}
 				break;

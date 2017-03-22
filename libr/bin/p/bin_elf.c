@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2016 - nibble, pancake */
+/* radare - LGPL - Copyright 2009-2017 - nibble, pancake */
 
 #include <stdio.h>
 #include <r_types.h>
@@ -49,7 +49,7 @@ static void * load_bytes(RBinFile *arch, const ut8 *buf, ut64 sz, ut64 loadaddr,
 	}
 	tbuf = r_buf_new ();
 	r_buf_set_bytes (tbuf, buf, sz);
-	res = Elf_(r_bin_elf_new_buf) (tbuf);
+	res = Elf_(r_bin_elf_new_buf) (tbuf, arch->rbin->verbose);
 	if (res) {
 		sdb_ns_set (sdb, "info", res->kv);
 	}
@@ -134,7 +134,8 @@ static RBinAddr* binsym(RBinFile *arch, int sym) {
 		ret->vaddr = Elf_(r_bin_elf_p2v) (obj, addr);
 		if (is_arm && addr & 1) {
 			ret->bits = 16;
-			//ret->vaddr --; // noes
+			ret->vaddr--; 
+			ret->paddr--; 
 		}
 	}
 	return ret;
@@ -322,7 +323,8 @@ static RList* sections(RBinFile *arch) {
 static void _set_arm_thumb_bits(struct Elf_(r_bin_elf_obj_t) *bin, RBinSymbol **sym) {
 	int bin_bits = Elf_(r_bin_elf_get_bits) (bin);
 	RBinSymbol *ptr = *sym;
-	if (ptr->name[0] == '$' && !ptr->name[2]) {
+	int len = strlen (ptr->name);
+	if (ptr->name[0] == '$' && (len >= 2 && !ptr->name[2])) {
 		switch (ptr->name[1]) {
 		case 'a' : //arm
 			ptr->bits = 32;
@@ -673,7 +675,7 @@ static RList* patch_relocs(RBin *b) {
 	RBinObject *obj = NULL;
 	struct Elf_(r_bin_elf_obj_t) *bin = NULL;
 	RIOSection *g = NULL, *s = NULL;
-	RListIter *iter;
+	SdbListIter *iter;
 	RBinElfReloc *relcs = NULL;
 	int i;
 	ut64 n_off, n_vaddr, vaddr, size, sym_addr = 0, offset = 0;
@@ -691,23 +693,23 @@ static RList* patch_relocs(RBin *b) {
 		return NULL;
 	}
 	if (!io->cached) {
-	   	eprintf ("Warning: run r2 with -e io.cache=true to fix relocations in disassembly\n");
+	   	eprintf ("Warning: run r2 with -e io.cache=true to fix relocations in disassembly\n");	//wat?
 		return relocs (r_bin_cur (b));
 	}
-	r_list_foreach (io->sections, iter, s) {
-		if (s->offset > offset) {
-			offset = s->offset;
+	ls_foreach (io->sections, iter, s) {
+		if (s->paddr > offset) {
+			offset = s->paddr;
 			g = s;
 		}
 	}
 	if (!g) {
 		return NULL;
 	}
-	n_off = g->offset + g->size;
+	n_off = g->paddr + g->size;
 	n_vaddr = g->vaddr + g->vsize;
 	//reserve at least that space
 	size = bin->reloc_num * 4;
-	if (!b->iob.section_add (io, n_off, n_vaddr, size, size, R_BIN_SCN_READABLE|R_BIN_SCN_MAP, ".got.r2", 0, io->desc->fd)) {
+	if (!b->iob.section_add (io, n_off, n_vaddr, size, size, R_BIN_SCN_READABLE|R_BIN_SCN_MAP, ".got.r2", 0, io->desc->fd)) {		//XXX binid is wrong
 		return NULL;
 	}
 	if (!(relcs = Elf_(r_bin_elf_get_relocs) (bin))) {
@@ -845,6 +847,7 @@ static RList* fields(RBinFile *arch) {
 			break;
 		}
 		ptr->name = strdup (field[i].name);
+		ptr->comment = NULL;
 		ptr->vaddr = field[i].offset;
 		ptr->paddr = field[i].offset;
 		r_list_append (ret, ptr);
@@ -872,12 +875,24 @@ static ut64 size(RBinFile *arch) {
 
 #if !R_BIN_ELF64 && !R_BIN_CGC
 
-static int check_bytes(const ut8 *buf, ut64 length) {
+static void headers32(RBinFile *arch) {
+#define p arch->rbin->cb_printf
+	const ut8 *buf = r_buf_get_at (arch->buf, 0, NULL);
+	p ("0x00000000  ELF MAGIC   0x%08x\n", r_read_le32 (buf));
+	p ("0x00000004  Type        0x%04x\n", r_read_le16 (buf + 4));
+	p ("0x00000006  Machine     0x%04x\n", r_read_le16 (buf + 6));
+	p ("0x00000008  Version     0x%08x\n", r_read_le32 (buf + 8));
+	p ("0x0000000c  Entrypoint  0x%08x\n", r_read_le32 (buf + 12));
+	p ("0x00000010  PhOff       0x%08x\n", r_read_le32 (buf + 16));
+	p ("0x00000014  ShOff       0x%08x\n", r_read_le32 (buf + 20));
+}
+
+static bool check_bytes(const ut8 *buf, ut64 length) {
 	return buf && length > 4 && memcmp (buf, ELFMAG, SELFMAG) == 0
 		&& buf[4] != 2;
 }
 
-static int check(RBinFile *arch) {
+static bool check(RBinFile *arch) {
 	const ut8 *bytes = arch ? r_buf_buffer (arch->buf) : NULL;
 	ut64 sz = arch ? r_buf_size (arch->buf): 0;
 	return check_bytes (bytes, sz);
@@ -1001,6 +1016,7 @@ RBinPlugin r_bin_plugin_elf = {
 	.imports = &imports,
 	.info = &info,
 	.fields = &fields,
+	.header = &headers32,
 	.size = &size,
 	.libs = &libs,
 	.relocs = &relocs,

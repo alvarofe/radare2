@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2016 - pancake */
+/* radare - LGPL - Copyright 2009-2017 - pancake */
 
 #include <r_userconf.h>
 #include <r_debug.h>
@@ -24,7 +24,7 @@ static void r_debug_native_stop(RDebug *dbg);
 
 #if __UNIX__ || __CYGWIN__
 # include <errno.h>
-# if !defined (__HAIKU__) && !defined (__CYGWIN__)
+# if !defined (__HAIKU__) && !defined (__CYGWIN__) && !defined (__sun)
 #  include <sys/ptrace.h>
 # endif
 # include <sys/wait.h>
@@ -76,7 +76,7 @@ static void r_debug_native_stop(RDebug *dbg);
 #   define WIFCONTINUED(s) ((s) == 0xffff)
 #  endif
 # endif
-#if (__x86_64__ || __i386__) && !defined(__ANDROID__)
+#if (__x86_64__ || __i386__ || __arm__ || __arm64__) && !defined(__ANDROID__)
 #include "native/linux/linux_coredump.h"
 #endif
 #else // OS
@@ -100,7 +100,7 @@ static void r_debug_native_stop(RDebug *dbg);
 #if !__APPLE__
 static int r_debug_handle_signals (RDebug *dbg) {
 #if __linux__
-	return linux_handle_signals (dbg);
+	return linux_handle_signals (dbg, 0);
 #else
 	return -1;
 #endif
@@ -229,7 +229,10 @@ static void r_debug_native_stop(RDebug *dbg) {
 /* TODO: must return true/false */
 static int r_debug_native_continue(RDebug *dbg, int pid, int tid, int sig) {
 #if __WINDOWS__ && !__CYGWIN__
-	if (ContinueDebugEvent (pid, tid, DBG_CONTINUE) == 0) {
+	/* Honor the Windows-specific signal that instructs threads to process exceptions */
+	DWORD continue_status = (sig == DBG_EXCEPTION_NOT_HANDLED)
+		? DBG_EXCEPTION_NOT_HANDLED : DBG_CONTINUE;
+	if (ContinueDebugEvent (pid, tid, continue_status) == 0) {
 		print_lasterr ((char *)__FUNCTION__, "ContinueDebugEvent");
 		eprintf ("debug_contp: error\n");
 		return false;
@@ -255,12 +258,12 @@ static int r_debug_native_continue(RDebug *dbg, int pid, int tid, int sig) {
 	if (sig != -1) {
 		contsig = sig;
 	}
-	//eprintf ("continuing with signal %d ...\n", contsig);
 	/* SIGINT handler for attached processes: dbg.consbreak (disabled by default) */
 	if (dbg->consbreak) {
 		r_cons_break_push ((RConsBreak)r_debug_native_stop, dbg);
 	}
-	return ptrace (PTRACE_CONT, pid, NULL, contsig) == 0;
+	int ret = ptrace (PTRACE_CONT, tid, NULL, contsig);
+	return ret >= 0 ? tid : false;
 #endif
 }
 static RDebugInfo* r_debug_native_info (RDebug *dbg, const char *arg) {
@@ -278,6 +281,7 @@ static RDebugInfo* r_debug_native_info (RDebug *dbg, const char *arg) {
 #if __WINDOWS__ && !__CYGWIN__
 static bool tracelib(RDebug *dbg, const char *mode, PLIB_ITEM item) {
 	const char *needle = NULL;
+	int tmp = 0;
 	if (mode) {
 		switch (mode[0]) {
 		case 'l': needle = dbg->glob_libs; break;
@@ -286,7 +290,10 @@ static bool tracelib(RDebug *dbg, const char *mode, PLIB_ITEM item) {
 	}
 	eprintf ("(%d) %sing library at %p (%s) %s\n", item->pid, mode,
 		item->BaseOfDll, item->Path, item->Name);
-	return !mode || !needle || r_str_glob (item->Name, needle);
+	if (needle && strlen (needle)) {
+		tmp = r_str_glob (item->Name, needle);
+	}
+	return !mode || !needle || tmp ;
 }
 #endif
 
@@ -300,24 +307,43 @@ static RDebugReasonType r_debug_native_wait (RDebug *dbg, int pid) {
 	RDebugReasonType reason = R_DEBUG_REASON_UNKNOWN;
 
 #if __WINDOWS__ && !__CYGWIN__
-	int mode = 0;
 	reason = w32_dbg_wait (dbg, pid);
 	if (reason == R_DEBUG_REASON_NEW_LIB) {
-		mode = 'l';
-	} else if (reason == R_DEBUG_REASON_EXIT_LIB) {
-		mode = 'u';
-	} else {
-		mode = 0;
-	}
-	if (mode) {
 		RDebugInfo *r = r_debug_native_info (dbg, "");
 		if (r && r->lib) {
-			if (tracelib (dbg, mode=='l'? "load":"unload", r->lib))
+			if (tracelib (dbg, "load", r->lib)) {
 				reason = R_DEBUG_REASON_TRAP;
+			}
+			r_debug_info_free (r);
 		} else {
-			eprintf ("%soading unknown library.\n", mode?"L":"Unl");
+			eprintf ("Loading unknown library.\n");
 		}
-		r_debug_info_free (r);
+	}
+	else if (reason == R_DEBUG_REASON_EXIT_LIB) {
+		RDebugInfo *r = r_debug_native_info (dbg, "");
+		if (r && r->lib) {
+			if (tracelib (dbg, "unload", r->lib)) {
+				reason = R_DEBUG_REASON_TRAP;
+			}
+			r_debug_info_free (r);
+		} else {
+			eprintf ("Unloading unknown library.\n");
+		}
+	} else if (reason == R_DEBUG_REASON_NEW_TID) {
+		RDebugInfo *r = r_debug_native_info (dbg, "");
+		if (r && r->thread) {
+			PTHREAD_ITEM item = r->thread;
+			eprintf ("(%d) Created thread %d (start @ %p)\n", item->pid, item->tid, item->lpStartAddress);
+			r_debug_info_free (r);
+		}
+
+	} else if (reason == R_DEBUG_REASON_EXIT_TID) {
+		RDebugInfo *r = r_debug_native_info (dbg, "");
+		if (r && r->thread) {
+			PTHREAD_ITEM item = r->thread;
+			eprintf ("(%d) Finished thread %d Exit code %d\n", item->pid, item->tid, item->dwExitCode);
+			r_debug_info_free (r);
+		}
 	}
 #else
 	if (pid == -1) {
@@ -330,12 +356,13 @@ static RDebugReasonType r_debug_native_wait (RDebug *dbg, int pid) {
 	reason = xnu_wait (dbg, pid);
 	status = reason? 1: 0;
 #else
+#if __linux__ && !defined (WAIT_ON_ALL_CHILDREN)
+	reason = linux_dbg_wait (dbg, dbg->tid);
+#else
 	// XXX: this is blocking, ^C will be ignored
 #ifdef WAIT_ON_ALL_CHILDREN
-	//eprintf ("waiting on all children ...\n");
 	int ret = waitpid (-1, &status, WAITPID_FLAGS);
 #else
-	//eprintf ("waiting on pid %d ...\n", pid);
 	int ret = waitpid (pid, &status, WAITPID_FLAGS);
 #endif // WAIT_ON_ALL_CHILDREN
 	if (ret == -1) {
@@ -372,12 +399,10 @@ static RDebugReasonType r_debug_native_wait (RDebug *dbg, int pid) {
 			eprintf ("child received signal %d\n", WTERMSIG (status));
 			reason = R_DEBUG_REASON_SIGNAL;
 		} else if (WIFSTOPPED (status)) {
-			if (WSTOPSIG (status) != SIGTRAP) {
+			if (WSTOPSIG (status) != SIGTRAP &&
+				WSTOPSIG (status) != SIGSTOP) {
 				eprintf ("child stopped with signal %d\n", WSTOPSIG (status));
 			}
-
-			/* this one might be good enough... */
-			dbg->reason.signum = WSTOPSIG (status);
 
 			/* the ptrace documentation says GETSIGINFO is only necessary for
 			 * differentiating the various stops.
@@ -413,9 +438,9 @@ static RDebugReasonType r_debug_native_wait (RDebug *dbg, int pid) {
 		eprintf ("%s: no idea what happened... wtf?!?!\n", __func__);
 		reason = R_DEBUG_REASON_ERROR;
 	}
+#endif // __linux__ && !defined (WAIT_ON_ALL_CHILDREN)
 #endif // __APPLE__
 #endif // __WINDOWS__ && !__CYGWIN__
-
 	dbg->reason.tid = pid;
 	dbg->reason.type = reason;
 	return reason;
@@ -642,7 +667,7 @@ static int bsd_reg_read (RDebug *dbg, int type, ut8* buf, int size) {
 		memset (&regs, 0, sizeof(regs));
 		memset (buf, 0, size);
 		#if __NetBSD__ || __OpenBSD__
-			ret = ptrace (PTRACE_GETREGS, pid, &regs, sizeof (regs));
+			ret = ptrace (PTRACE_GETREGS, pid, (caddr_t)&regs, sizeof (regs));
 		#elif __KFBSD__
 			ret = ptrace(PT_GETREGS, pid, (caddr_t)&regs, 0);
 		#else
@@ -892,7 +917,7 @@ static RList *r_debug_native_map_get (RDebug *dbg) {
 #if __sun
 	char path[1024];
 	/* TODO: On solaris parse /proc/%d/map */
-	snprintf (path, sizeof(path) - 1, "pmap %d > /dev/stderr", ps.tid);
+	snprintf (path, sizeof(path) - 1, "pmap %d >&2", ps.tid);
 	system (path);
 #else
 	RDebugMap *map;
@@ -937,7 +962,8 @@ static RList *r_debug_native_map_get (RDebug *dbg) {
 	list->free = (RListFree)_map_free;
 	while (!feof (fd)) {
 		size_t line_len;
-		ut64 map_start, map_end;
+		bool map_is_shared = false;
+		ut64 map_start, map_end, offset;
 
 		if (!fgets (line, sizeof (line), fd)) {
 			break;
@@ -971,10 +997,10 @@ static RList *r_debug_native_map_get (RDebug *dbg) {
 		}
 #else
 		// 7fc8124c4000-7fc81278d000 r--p 00000000 fc:00 17043921 /usr/lib/locale/locale-archive
-		i = sscanf (line, "%s %s %*s %*s %*s %[^\n]", &region[2], perms, name);
-		if (i == 2) {
+		i = sscanf (line, "%s %s %08"PFMT64x" %*s %*s %[^\n]", &region[2], perms, &offset, name);
+		if (i == 3) {
 			name[0] = '\0';
-		} else if (i != 3) {
+		} else if (i != 4) {
 			eprintf ("%s: Unable to parse \"%s\"\n", __func__, path);
 			eprintf ("%s: problematic line: %s\n", __func__, line);
 			r_list_free (list);
@@ -992,11 +1018,13 @@ static RList *r_debug_native_map_get (RDebug *dbg) {
 			snprintf (name, sizeof (name), "unk%d", unk++);
 		}
 		perm = 0;
-		for (i = 0; perms[i] && i < 4; i++) {
+		for (i = 0; perms[i] && i < 5; i++) {
 			switch (perms[i]) {
 			case 'r': perm |= R_IO_READ; break;
 			case 'w': perm |= R_IO_WRITE; break;
 			case 'x': perm |= R_IO_EXEC; break;
+			case 'p': map_is_shared = false; break;
+			case 's': map_is_shared = true; break;
 			}
 		}
 
@@ -1010,6 +1038,10 @@ static RList *r_debug_native_map_get (RDebug *dbg) {
 		if (!map) {
 			break;
 		}
+#if __linux__
+		map->offset = offset;
+		map->shared = map_is_shared;
+#endif
 		map->file = strdup (name);
 		r_list_append (list, map);
 	}
@@ -1095,8 +1127,16 @@ static int r_debug_native_kill (RDebug *dbg, int pid, int tid, int sig) {
 		}
 	} else {
 #endif
-	if ((r_sandbox_kill (pid, sig) != -1)) ret = true;
-	if (errno == 1) ret = -true; // EPERM
+	if (sig == SIGKILL && dbg->threads) {
+		r_list_free (dbg->threads);
+		dbg->threads = NULL;
+	}
+	if ((r_sandbox_kill (pid, sig) != -1)) {
+		ret = true;
+	}
+	if (errno == 1) {
+		ret = -true; // EPERM
+	}
 #if 0
 //	}
 #endif
@@ -1556,7 +1596,7 @@ RDebugPlugin r_debug_plugin_native = {
 };
 
 #ifndef CORELIB
-struct r_lib_struct_t radare_plugin = {
+RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_DBG,
 	.data = &r_debug_plugin_native,
 	.version = R2_VERSION
@@ -1565,7 +1605,7 @@ struct r_lib_struct_t radare_plugin = {
 
 //#endif
 #else // DEBUGGER
-struct r_debug_plugin_t r_debug_plugin_native = {
+RDebugPlugin r_debug_plugin_native = {
 	NULL // .name = "native",
 };
 

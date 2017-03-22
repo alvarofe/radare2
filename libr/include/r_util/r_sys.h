@@ -40,6 +40,7 @@ R_API char *r_sys_getdir(void);
 R_API int r_sys_chdir(const char *s);
 R_API int r_sys_cmd_str_full(const char *cmd, const char *input, char **output, int *len, char **sterr);
 #if __WINDOWS__
+R_API int r_sys_get_src_dir_w32(char *buf);
 R_API char *r_sys_cmd_str_w32(const char *cmd);
 #endif
 R_API int r_sys_truncate(const char *file, int sz);
@@ -50,4 +51,12 @@ R_API char *r_sys_cmd_str(const char *cmd, const char *input, int *len);
 R_API char *r_sys_cmd_strf(const char *cmd, ...);
 //#define r_sys_cmd_str(cmd, input, len) r_sys_cmd_str_full(cmd, input, len, 0)
 R_API void r_sys_backtrace(void);
+R_API bool r_sys_tts(const char *txt, bool bg);
+
+/* syscmd */
+R_API char *r_syscmd_ls(const char *input);
+R_API char *r_syscmd_cat(const char *file);
+R_API char *r_syscmd_mkdir(const char *dir);
+R_API bool r_syscmd_mv(const char *input);
+
 #endif //  R_SYS_H

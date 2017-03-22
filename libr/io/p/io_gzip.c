@@ -27,9 +27,9 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int count) {
 	if (RIOMALLOC_OFF (fd) > RIOMALLOC_SZ (fd)) {
 		return -1;
 	}
-	if (RIOMALLOC_OFF (fd) + count > RIOMALLOC_SZ (fd))
+	if (RIOMALLOC_OFF (fd) + count > RIOMALLOC_SZ (fd)) {
 		count -= (RIOMALLOC_OFF (fd) + count-(RIOMALLOC_SZ (fd)));
-
+	}
 	if (count > 0) {
 		memcpy (RIOMALLOC_BUF (fd) + RIOMALLOC_OFF (fd), buf, count);
 		RIOMALLOC_OFF (fd) += count;
@@ -51,8 +51,9 @@ static bool __resize(RIO *io, RIODesc *fd, ut64 count) {
 		return false;
 	}
 	memcpy (new_buf, RIOMALLOC_BUF (fd), R_MIN (count, RIOMALLOC_SZ (fd)));
-	if (count > RIOMALLOC_SZ (fd))
+	if (count > RIOMALLOC_SZ (fd)) {
 		memset (new_buf + RIOMALLOC_SZ (fd), 0, count - RIOMALLOC_SZ (fd));
+	}
 	free (RIOMALLOC_BUF (fd));
 	RIOMALLOC_BUF (fd) = new_buf;
 	RIOMALLOC_SZ (fd) = count;
@@ -61,27 +62,30 @@ static bool __resize(RIO *io, RIODesc *fd, ut64 count) {
 
 static int __read(RIO *io, RIODesc *fd, ut8 *buf, int count) {
 	memset (buf, 0xff, count);
-	if (!fd || !fd->data)
+	if (!fd || !fd->data) {
 		return -1;
-	if (RIOMALLOC_OFF (fd) > RIOMALLOC_SZ (fd))
+	}
+	if (RIOMALLOC_OFF (fd) > RIOMALLOC_SZ (fd)) {
 		return -1;
-	if (RIOMALLOC_OFF (fd) + count >= RIOMALLOC_SZ (fd))
+	}
+	if (RIOMALLOC_OFF (fd) + count >= RIOMALLOC_SZ (fd)) {
 		count = RIOMALLOC_SZ (fd) - RIOMALLOC_OFF (fd);
+	}
 	memcpy (buf, RIOMALLOC_BUF (fd) + RIOMALLOC_OFF (fd), count);
 	return count;
 }
 
 static int __close(RIODesc *fd) {
 	RIOGzip *riom;
-	if (!fd || !fd->data)
+	if (!fd || !fd->data) {
 		return -1;
+	}
 	eprintf ("TODO: Writing changes into gzipped files is not yet supported\n");
 	riom = fd->data;
 	free (riom->buf);
 	riom->buf = NULL;
 	free (fd->data);
 	fd->data = NULL;
-	fd->state = R_IO_DESC_TYPE_CLOSED;
 	return 0;
 }
 
@@ -113,23 +117,22 @@ static bool __plugin_open(RIO *io, const char *pathname, bool many) {
 static RIODesc *__open(RIO *io, const char *pathname, int rw, int mode) {
 	if (__plugin_open (io, pathname, 0)) {
 		RIOGzip *mal = R_NEW0 (RIOGzip);
-		if (mal) {
-			int len;
-			ut8 *data = (ut8*)r_file_slurp (pathname+7, &len);
-			mal->buf = r_inflate (data, len, NULL, &mal->size);
-			if (mal->buf) {
-				RETURN_IO_DESC_NEW (&r_io_plugin_malloc,
-					mal->fd, pathname, rw, mode, mal);
-			}
-			free (data);
-			eprintf ("Cannot allocate (%s) %d bytes\n", pathname + 9, mal->size);
-			free (mal);
-		}
+		if (!mal) return NULL;
+		int len;
+		ut8 *data = (ut8*)r_file_slurp (pathname+7, &len);
+		mal->buf = r_inflate (data, len, NULL, &mal->size);
+		if (mal->buf)
+			return r_io_desc_new (io, &r_io_plugin_malloc,
+				pathname, rw, mode, mal);
+		free (data);
+		eprintf ("Cannot allocate (%s) %d bytes\n", pathname+9,
+			mal->size);
+		free (mal);
 	}
 	return NULL;
 }
 
-struct r_io_plugin_t r_io_plugin_gzip = {
+RIOPlugin r_io_plugin_gzip = {
 	.name = "gzip",
 	.desc = "read/write gzipped files",
 	.license = "LGPL3",
@@ -143,7 +146,7 @@ struct r_io_plugin_t r_io_plugin_gzip = {
 };
 
 #ifndef CORELIB
-struct r_lib_struct_t radare_plugin = {
+RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_IO,
 	.data = &r_io_plugin_gzip,
 	.version = R2_VERSION

@@ -14,14 +14,14 @@
 #endif
 
 #if DEBUGGER && DEBUGGER_SUPPORTED
-
+#if 0
 static void my_io_redirect (RIO *io, const char *ref, const char *file) {
 	free (io->referer);
 	io->referer = ref? strdup (ref): NULL;
 	free (io->redirect);
 	io->redirect = file? strdup (file): NULL;
 }
-
+#endif
 #define MAGIC_EXIT 123
 
 #include <signal.h>
@@ -164,10 +164,12 @@ static int fork_and_ptraceme(RIO *io, int bits, const char *cmd) {
 		goto err_fork;
         }
 
-	if (th != INVALID_HANDLE_VALUE) CloseHandle (th);
-
+	if (th != INVALID_HANDLE_VALUE) {
+		CloseHandle (th);
+	}
+	
 	eprintf ("Spawned new process with pid %d, tid = %d\n", pid, tid);
-	io->winbase = de.u.CreateProcessInfo.lpBaseOfImage;
+	io->winbase = (ut64)de.u.CreateProcessInfo.lpBaseOfImage;
 	io->wintid = tid;
 	io->winpid = pid;
 	return pid;
@@ -404,6 +406,8 @@ static int get_pid_of(RIO *io, const char *procname) {
 }
 
 static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
+	RIOPlugin *_plugin;
+	RIODesc *ret = NULL;
 	char uri[128];
 	if (!strncmp (file, "waitfor://", 10)) {
 		const char *procname = file + 10;
@@ -441,28 +445,55 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 			}
 #if __WINDOWS__
 			sprintf (uri, "w32dbg://%d", pid);
+			_plugin = r_io_plugin_resolve (io, (const char *)uri, false);
+			ret = _plugin->open (io, uri, rw, mode);
 #elif __APPLE__
-			sprintf (uri, "mach://%d", pid);
+			sprintf (uri, "smach://%d", pid);		//s is for spawn
+			_plugin = r_io_plugin_resolve (io, (const char *)&uri[1], false);
+			if (!_plugin->open || !_plugin->close) {
+				return NULL;
+			}
+			ret = _plugin->open (io, uri, rw, mode);
 #else
 			// TODO: use io_procpid here? faster or what?
-			sprintf (uri, "ptrace://%d", pid);
+			sprintf (uri, "ptrace://%d", pid);	
+			_plugin = r_io_plugin_resolve (io, (const char *)uri, false);
+			ret = _plugin->open (io, uri, rw, mode);
 #endif
-			my_io_redirect (io, file, uri);
 		} else {
 			sprintf (uri, "attach://%d", pid);
-			my_io_redirect (io, file, uri);
+			_plugin = r_io_plugin_resolve (io, (const char *)uri, false);
+			if (!_plugin->open) {
+				ret = _plugin->open (io, uri, rw, mode);
+			}
 		}
-		return NULL;
+		if (ret) {
+			ret->plugin = _plugin;
+			ret->referer = strdup (file);		//kill this
+		}
 	}
-	my_io_redirect (io, file, NULL);
-	return NULL;
+	return ret;
+}
+
+static int __close (RIODesc *desc) {
+	int ret = -2;
+	eprintf ("something went wrong\n");
+	if (desc) {
+		eprintf ("trying to close %d with io_debug\n", desc->fd);
+		ret = -1;
+	}
+	r_sys_backtrace ();
+	return ret;
 }
 
 RIOPlugin r_io_plugin_debug = {
 	.name = "debug",
         .desc = "Native debugger (dbg:///bin/ls dbg://1388 pidof:// waitfor://)",
 	.license = "LGPL3",
+	.author = "pancake",
+	.version = "0.1.0",
         .open = __open,
+	.close = __close,
         .check = __plugin_open,
 	.isdbg = true,
 };

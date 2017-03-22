@@ -5,6 +5,19 @@
 #include <capstone/capstone.h>
 #include <capstone/x86.h>
 
+#if 0
+CYCLES:
+======
+register access = 1
+memory access = 2
+jump = 3
+call = 4
+#endif
+
+#define CYCLE_REG 0
+#define CYCLE_MEM 1
+#define CYCLE_JMP 2
+
 // TODO: when capstone-4 is released, add proper check here
 
 #if CS_NEXT_VERSION>0
@@ -20,6 +33,7 @@
 #endif
 
 #define esilprintf(op, fmt, arg...) r_strbuf_setf (&op->esil, fmt, ##arg)
+#define opexprintf(op, fmt, arg...) r_strbuf_setf (&op->opex, fmt, ##arg)
 #define INSOP(n) insn->detail->x86.operands[n]
 #define INSOPS insn->detail->x86.op_count
 #define ISIMM(x) insn->detail->x86.operands[x].type == X86_OP_IMM
@@ -45,6 +59,77 @@ struct Getarg {
 	cs_insn *insn;
 	int bits;
 };
+
+static void opex(RStrBuf *buf, csh handle, cs_insn *insn) {
+	int i;
+	r_strbuf_init (buf);
+	r_strbuf_append (buf, "{");
+	cs_x86 *x = &insn->detail->x86;
+	r_strbuf_appendf (buf, "\"operands\":[", x->op_count);
+	for (i = 0; i < x->op_count; i++) {
+		cs_x86_op *op = &x->operands[i];
+		if (i > 0) {
+			r_strbuf_append (buf, ",");
+		}
+		r_strbuf_appendf (buf, "{\"size\":%d", op->size);
+#if CS_API_MAJOR >= 4
+		r_strbuf_appendf (buf, ",\"rw\":%d", op->access); // read , write, read|write
+#endif
+		switch (op->type) {
+		case X86_OP_REG:
+			r_strbuf_appendf (buf, ",\"type\":\"reg\"");
+			r_strbuf_appendf (buf, ",\"value\":\"%s\"", cs_reg_name (handle, op->reg));
+			break;
+		case X86_OP_IMM:
+			r_strbuf_appendf (buf, ",\"type\":\"imm\"");
+			r_strbuf_appendf (buf, ",\"value\":%"PFMT64d, op->imm);
+			break;
+		case X86_OP_MEM:
+			r_strbuf_appendf (buf, ",\"type\":\"mem\"");
+			if (op->mem.segment != X86_REG_INVALID) {
+				r_strbuf_appendf (buf, ",\"segment\":\"%s\"", cs_reg_name (handle, op->mem.segment));
+			}
+			if (op->mem.base != X86_REG_INVALID) {
+				r_strbuf_appendf (buf, ",\"base\":\"%s\"", cs_reg_name (handle, op->mem.base));
+			}
+			if (op->mem.index != X86_REG_INVALID) {
+				r_strbuf_appendf (buf, ",\"index\":\"%s\"", cs_reg_name (handle, op->mem.index));
+			}
+			r_strbuf_appendf (buf, ",\"scale\":%d", op->mem.scale);
+			r_strbuf_appendf (buf, ",\"disp\":%"PFMT64d"", op->mem.disp);
+			break;
+		default:
+			r_strbuf_appendf (buf, ",\"type\":\"invalid\"");
+			break;
+		}
+		r_strbuf_appendf (buf, "}");
+	}
+	r_strbuf_appendf (buf, "]");
+	if (x->rex) {
+		r_strbuf_append (buf, ",\"rex\":true");
+	}
+	if (x->modrm) {
+		r_strbuf_append (buf, ",\"modrm\":true");
+	}
+	if (x->sib) {
+		r_strbuf_appendf (buf, ",\"sib\":%d", x->sib);
+	}
+	if (x->disp) {
+		r_strbuf_appendf (buf, ",\"disp\":%d", x->disp);
+	}
+	if (x->sib_index) {
+		r_strbuf_appendf (buf, ",\"sib_index\":\"%s\"",
+				cs_reg_name (handle, x->sib_index));
+	}
+	if (x->sib_scale) {
+		r_strbuf_appendf (buf, ",\"sib_scale\":%d", x->sib_scale);
+	}
+	if (x->sib_base) {
+		r_strbuf_appendf (buf, ",\"sib_base\":\"%s\"",
+				cs_reg_name (handle, x->sib_base));
+	}
+	r_strbuf_append (buf, "}");
+}
 
 static bool is_xmm_reg(cs_x86_op op) {
 	switch (op.reg) {
@@ -203,7 +288,6 @@ static char *getarg(struct Getarg* gop, int n, int set, char *setop, int sel) {
 			snprintf (buf_, BUF_SZ, "%s,[%d]", out, op.size==10? 8: op.size);
 			strncpy (out, buf_, BUF_SZ);
 		}
-
 		out[BUF_SZ - 1] = 0;
 		}
 		return out;
@@ -277,6 +361,7 @@ static void anop_esil (RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len
 	if (op->prefix & R_ANAL_OP_PREFIX_REP) {
 		esilprintf (op, "%s,!,?{,BREAK,},", counter);
 	}
+	opex (&op->opex, *handle, insn);
 
 	switch (insn->id) {
 	case X86_INS_FNOP:
@@ -1709,6 +1794,7 @@ static void anop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, csh 
 			op->dst->reg = R_NEW0 (RRegItem);
 			parse_reg_name_mov (op->dst->reg, &gop.handle, insn, 0);
 
+			op->cycles = CYCLE_MEM;
 			op->ptr = INSOP(0).mem.disp;
 			op->refptr = INSOP(0).size;
 			if (INSOP(0).mem.base == X86_REG_RIP) {
@@ -1904,9 +1990,12 @@ static void anop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, csh 
 		case X86_OP_IMM:
 			op->val = op->ptr = INSOP(0).imm;
 			op->type = R_ANAL_OP_TYPE_PUSH;
+			op->cycles = CYCLE_REG + CYCLE_MEM;
 			break;
 		default:
 			op->type = R_ANAL_OP_TYPE_UPUSH;
+			op->cycles = 1;
+			op->cycles = CYCLE_MEM + CYCLE_MEM;
 			break;
 		}
 		op->stackop = R_ANAL_STACK_INC;
@@ -1943,6 +2032,7 @@ static void anop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, csh 
 		op->type = R_ANAL_OP_TYPE_RET;
 		op->stackop = R_ANAL_STACK_INC;
 		op->stackptr = -regsz;
+		op->cycles = CYCLE_MEM + CYCLE_JMP;
 		break;
 	case X86_INS_INT3:
 		op->type = R_ANAL_OP_TYPE_TRAP; // TRAP
@@ -1958,6 +2048,7 @@ static void anop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, csh 
 	case X86_INS_SYSCALL:
 	case X86_INS_SYSENTER:
 		op->type = R_ANAL_OP_TYPE_SWI;
+		op->cycles = CYCLE_JMP;
 		break;
 	case X86_INS_SYSEXIT:
 		op->type = R_ANAL_OP_TYPE_SWI;
@@ -1993,9 +2084,11 @@ static void anop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, csh 
 		op->type = R_ANAL_OP_TYPE_CJMP;
 		op->jump = INSOP(0).imm;
 		op->fail = addr + op->size;
+		op->cycles = CYCLE_JMP;
 		break;
 	case X86_INS_CALL:
 	case X86_INS_LCALL:
+		op->cycles = CYCLE_JMP + CYCLE_MEM;
 		switch (INSOP(0).type) {
 		case X86_OP_IMM:
 			op->type = R_ANAL_OP_TYPE_CALL;
@@ -2011,6 +2104,7 @@ static void anop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, csh 
 			op->disp = INSOP (0).mem.disp;
 			op->reg = NULL;
 			op->ireg = NULL;
+			op->cycles += CYCLE_MEM;
 			if (INSOP (0).mem.index == X86_REG_INVALID) {
 				if (INSOP (0).mem.base != X86_REG_INVALID) {
 					op->reg = cs_reg_name (*handle, INSOP (0).mem.base);
@@ -2029,6 +2123,7 @@ static void anop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, csh 
 			op->reg = cs_reg_name (*handle, INSOP (0).reg);
 			op->type = R_ANAL_OP_TYPE_RCALL;
 			op->ptr = UT64_MAX;
+			op->cycles += CYCLE_REG;
 			break;
 		default:
 			op->type = R_ANAL_OP_TYPE_UCALL;
@@ -2049,6 +2144,7 @@ static void anop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, csh 
 				op->jump = INSOP(0).imm;
 			}
 			op->type = R_ANAL_OP_TYPE_JMP;
+			op->cycles = CYCLE_JMP;
 			break;
 		case X86_OP_MEM:
 			// op->type = R_ANAL_OP_TYPE_UJMP;
@@ -2057,6 +2153,7 @@ static void anop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, csh 
 			op->disp = INSOP (0).mem.disp;
 			op->reg = NULL;
 			op->ireg = NULL;
+			op->cycles = CYCLE_JMP + CYCLE_MEM;
 			if (INSOP(0).mem.base != X86_REG_INVALID) {
 				if (INSOP (0).mem.base != X86_REG_INVALID) {
 					op->reg = cs_reg_name (*handle, INSOP (0).mem.base);
@@ -2077,6 +2174,7 @@ static void anop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, csh 
 			break;
 		case X86_OP_REG:
 			{
+			op->cycles = CYCLE_JMP + CYCLE_REG;
 			op->reg = cs_reg_name (gop.handle, INSOP(0).reg);
 			op->type = R_ANAL_OP_TYPE_RJMP;
 			op->ptr = UT64_MAX;
@@ -2306,7 +2404,6 @@ static int cs_len_prefix_opcode(uint8_t *item) {
 	}
 	return len;
 }
-
 
 static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len) {
 	static int omode = 0;
@@ -2865,7 +2962,7 @@ RAnalPlugin r_anal_plugin_x86_cs = {
 };
 
 #ifndef CORELIB
-struct r_lib_struct_t radare_plugin = {
+RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_x86_cs,
 	.version = R2_VERSION

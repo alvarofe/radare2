@@ -9,6 +9,9 @@ R_API int r_core_pseudo_code(RCore *core, const char *input) {
 	const char *blocktype = "else";
 	RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset, R_ANAL_FCN_TYPE_NULL);
 	RConfigHold *hc = r_config_hold_new (core->config);
+	if (!hc) {
+		return false;
+	}
 	r_config_save_num (hc, "asm.pseudo", "asm.decode", "asm.lines", "asm.bytes", NULL);
 	r_config_save_num (hc, "asm.offset", "asm.flags", "asm.fcnlines", "asm.comments", NULL);
 	r_config_save_num (hc, "asm.functions", "asm.section", "asm.cmtcol", "asm.filter", NULL);
@@ -19,7 +22,7 @@ R_API int r_core_pseudo_code(RCore *core, const char *input) {
 	}
 	r_config_set_i (core->config, "asm.pseudo", 1);
 	r_config_set_i (core->config, "asm.decode", 0);
-	r_config_set_i (core->config, "asm.filter", 0);
+	r_config_set_i (core->config, "asm.filter", 1);
 	r_config_set_i (core->config, "asm.lines", 0);
 	r_config_set_i (core->config, "asm.bytes", 0);
 	r_config_set_i (core->config, "asm.offset", 0);
@@ -55,7 +58,7 @@ R_API int r_core_pseudo_code(RCore *core, const char *input) {
 		if (!bb) break;
 		r_cons_push ();
 		char *code = r_core_cmd_str (core, sdb_fmt(0,
-			"pDI %d @ 0x%08"PFMT64x"\n", bb->size, bb->addr));
+			"pD %d @ 0x%08"PFMT64x"\n", bb->size, bb->addr));
 		r_cons_pop ();
 		memset (indentstr, ' ', indent*I_TAB);
 		indentstr [(indent*I_TAB)-2] = 0;

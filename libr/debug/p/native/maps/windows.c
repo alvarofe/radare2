@@ -4,7 +4,6 @@ static RList *w32_dbg_modules(RDebug *dbg) {
 	HANDLE hModuleSnap = 0;
 	MODULEENTRY32 me32;
 	RDebugMap *mr;
-	char *mapname = NULL;
 	int pid = dbg->pid;
 	RList *list = r_list_new ();
 
@@ -22,14 +21,12 @@ static RList *w32_dbg_modules(RDebug *dbg) {
 	hProcess = w32_openprocess (PROCESS_QUERY_INFORMATION |PROCESS_VM_READ,FALSE, pid );
 	do {
 		ut64 baddr = (ut64)(size_t)me32.modBaseAddr;
-		mapname = (char *)malloc(MAX_PATH);
-		snprintf (mapname, MAX_PATH, "%s\\%s", me32.szExePath, me32.szModule);
-		mr = r_debug_map_new (mapname, baddr, baddr + me32.modBaseSize, 0, 0);
+		mr = r_debug_map_new (me32.szModule, baddr, baddr + me32.modBaseSize, 0, 0);
 		if (mr != NULL) {
-			mr->file=strdup(mapname);
-			r_list_append (list, mr);
+			mr->file = strdup (me32.szExePath);
+			if (mr->file != NULL)
+				r_list_append (list, mr);
 		}
-		free(mapname);
 	} while(Module32Next (hModuleSnap, &me32));
 	CloseHandle (hModuleSnap);
 	CloseHandle (hProcess);
@@ -41,6 +38,7 @@ static RList *w32_dbg_maps(RDebug *dbg) {
 	HANDLE hModuleSnap = 0;
 	IMAGE_DOS_HEADER *dos_header;
 	IMAGE_NT_HEADERS *nt_headers;
+	IMAGE_NT_HEADERS32 *nt_headers32;
 	IMAGE_SECTION_HEADER *SectionHeader;
 	SIZE_T ret_len;
 	MODULEENTRY32 me32;
@@ -64,28 +62,24 @@ static RList *w32_dbg_maps(RDebug *dbg) {
 		CloseHandle (hModuleSnap);
 		return NULL;
 	}
-	hProcess=w32_openprocess (PROCESS_QUERY_INFORMATION |PROCESS_VM_READ,
-				FALSE, pid );
+	hProcess = w32_openprocess (PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
 	do {
-		ReadProcessMemory (WIN32_PI (hProcess),
-				(const void *)me32.modBaseAddr,
-				(LPVOID)PeHeader, sizeof(PeHeader), &ret_len);
-
+		ReadProcessMemory (WIN32_PI (hProcess), (const void *)me32.modBaseAddr, (LPVOID)PeHeader, sizeof(PeHeader), &ret_len);
 		if (ret_len == sizeof (PeHeader) && CheckValidPE (PeHeader)) {
 			dos_header = (IMAGE_DOS_HEADER *)PeHeader;
 			if (!dos_header) continue;
-			nt_headers = (IMAGE_NT_HEADERS *)((char *)dos_header \
-							+ dos_header->e_lfanew);
+			nt_headers = (IMAGE_NT_HEADERS *)((char *)dos_header + dos_header->e_lfanew);
 			if (!nt_headers) continue;
-			NumSections = nt_headers->FileHeader.NumberOfSections;
-			SectionHeader = (IMAGE_SECTION_HEADER *) ((char *)nt_headers \
-								+ sizeof(IMAGE_NT_HEADERS));
-			mr = r_debug_map_new (me32.szModule,
-					(ut64)(size_t) (me32.modBaseAddr),
-					(ut64)(size_t) (me32.modBaseAddr + \
-					SectionHeader->VirtualAddress),
-					SectionHeader->Characteristics,
-					0);
+			if (nt_headers->FileHeader.Machine == 0x014c) { // check for x32 pefile
+				nt_headers32 = (IMAGE_NT_HEADERS32 *)((char *)dos_header + dos_header->e_lfanew);
+				NumSections = nt_headers32->FileHeader.NumberOfSections;
+				SectionHeader = (IMAGE_SECTION_HEADER *)((char *)nt_headers32 + sizeof (IMAGE_NT_HEADERS32));
+
+			} else {
+				NumSections = nt_headers->FileHeader.NumberOfSections;
+				SectionHeader = (IMAGE_SECTION_HEADER *)((char *)nt_headers + sizeof (IMAGE_NT_HEADERS));
+			}
+			mr = r_debug_map_new (me32.szModule, (ut64)(size_t) (me32.modBaseAddr), (ut64)(size_t) (me32.modBaseAddr + SectionHeader->VirtualAddress), SectionHeader->Characteristics, 0);
 			if (mr != NULL) r_list_append (list, mr);
 			if (NumSections <= 0) continue;
 			mapname = (char *)malloc(MAX_PATH);
@@ -93,17 +87,8 @@ static RList *w32_dbg_maps(RDebug *dbg) {
 			for (i = 0; i < NumSections; i++) {
 				if (SectionHeader->Misc.VirtualSize <= 0)
 					continue;
-				sprintf(mapname,"%s | %s",
-					me32.szModule,
-					SectionHeader->Name);
-
-				mr = r_debug_map_new (mapname,
-					(ut64)(size_t)(SectionHeader->VirtualAddress +\
-					me32.modBaseAddr),
-					(ut64)(size_t)(SectionHeader->VirtualAddress + \
-					me32.modBaseAddr + SectionHeader->Misc.VirtualSize),
-					SectionHeader->Characteristics, // XXX?
-					0);
+				sprintf(mapname,"%s | %s", me32.szModule, SectionHeader->Name);
+				mr = r_debug_map_new (mapname, (ut64)(size_t)(SectionHeader->VirtualAddress + me32.modBaseAddr), (ut64)(size_t)(SectionHeader->VirtualAddress + me32.modBaseAddr + SectionHeader->Misc.VirtualSize), SectionHeader->Characteristics, 0);
 				if (mr != NULL) r_list_append (list, mr);
 				SectionHeader++;
 			}

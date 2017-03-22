@@ -33,16 +33,20 @@
 #include "r_util/r_queue.h"
 #include "r_util/r_range.h"
 #include "r_util/r_sandbox.h"
+#include "r_util/r_signal.h"
 #include "r_util/r_spaces.h"
 #include "r_util/r_stack.h"
 #include "r_util/r_str.h"
 #include "r_util/r_strbuf.h"
-#include "r_util/r_strht.h"
 #include "r_util/r_strpool.h"
 #include "r_util/r_sys.h"
 #include "r_util/r_tree.h"
 #include "r_util/r_uleb128.h"
 #include "r_util/r_utf8.h"
+#include "r_util/r_id_storage.h"
+#include "r_util/r_asn1.h"
+#include "r_util/r_x509.h"
+#include "r_util/r_pkcs7.h"
 #if __UNIX__
 #include <signal.h>
 #endif

@@ -40,13 +40,9 @@ fileslist=(
 ./mk/rapi-list
 ./sys/afl.sh
 ./sys/all.sh
-./sys/android-aarch64.sh
-./sys/android-arm.sh
+./sys/android-target.sh
 ./sys/android-build.sh
-./sys/android-mips64.sh
-./sys/android-mips.sh
 ./sys/android-shell.sh
-./sys/android-x86.sh
 ./sys/asan.sh
 ./sys/bokken.sh
 ./sys/build-harden.sh
@@ -83,7 +79,6 @@ fileslist=(
 ./sys/jam.sh
 ./sys/ldconfig.sh
 ./sys/locdiff
-./sys/lua.sh
 ./sys/maemo.sh
 ./sys/mingw32-deps.sh
 ./sys/mingw32-python-deps.sh
@@ -111,7 +106,6 @@ fileslist=(
 ./sys/user.sh
 ./sys/valabind.sh
 ./sys/vala.sh
-./sys/whereis.sh
 )
 
 FMT=gcc

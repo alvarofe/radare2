@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2010-2015 pancake, nibble */
+/* radare - LGPL - Copyright 2010-2017 pancake, nibble */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,12 +27,18 @@ ut64 Elf_(r_bin_elf_resize_section)(struct Elf_(r_bin_elf_obj_t) *bin, const cha
 	}
 
 	/* calculate delta */
-	for (i = 0, shdrp = shdr; i < ehdr->e_shnum; i++, shdrp++) 
-		if (!strncmp(name, &strtab[shdrp->sh_name], ELF_STRING_LENGTH)) {
+	for (i = 0, shdrp = shdr; i < ehdr->e_shnum; i++, shdrp++) {
+		int idx = shdrp->sh_name;
+		if (idx < 0 || idx >= bin->shstrtab_size) {
+			continue;
+		}
+		const char *sh_name = &strtab[shdrp->sh_name];
+		if (sh_name && !strncmp (name, sh_name, ELF_STRING_LENGTH)) {
 			delta =  rsz_size - shdrp->sh_size;
 			rsz_offset = (ut64)shdrp->sh_offset;
 			rsz_osize = (ut64)shdrp->sh_size;
 		}
+	}
 
 	if (delta == 0) {
 		eprintf ("Cannot find section\n");
@@ -165,14 +171,17 @@ ut64 Elf_(r_bin_elf_resize_section)(struct Elf_(r_bin_elf_obj_t) *bin, const cha
 }
 
 /* XXX Endianness? */
-int Elf_(r_bin_elf_del_rpath)(struct Elf_(r_bin_elf_obj_t) *bin) {
+bool Elf_(r_bin_elf_del_rpath)(struct Elf_(r_bin_elf_obj_t) *bin) {
 	Elf_(Dyn) *dyn = NULL;
 	ut64 stroff = 0LL;
 	int ndyn, i, j;
 
+	if (!bin->phdr) {
+		return false;
+	}
 	for (i = 0; i < bin->ehdr.e_phnum; i++)
 		if (bin->phdr[i].p_type == PT_DYNAMIC) {
-			if (!(dyn = malloc (1+bin->phdr[i].p_filesz))) {
+			if (!(dyn = malloc (bin->phdr[i].p_filesz + 1))) {
 				perror ("malloc (dyn)");
 				return false;
 			}
@@ -181,7 +190,7 @@ int Elf_(r_bin_elf_del_rpath)(struct Elf_(r_bin_elf_obj_t) *bin) {
 				free (dyn);
 				return false;
 			}
-			if ((ndyn = (int)(bin->phdr[i].p_filesz / sizeof(Elf_(Dyn)))) > 0) {
+			if ((ndyn = (int)(bin->phdr[i].p_filesz / sizeof (Elf_(Dyn)))) > 0) {
 				for (j = 0; j < ndyn; j++)
 					if (dyn[j].d_tag == DT_STRTAB) {
 						stroff = (ut64)(dyn[j].d_un.d_ptr - bin->baddr);

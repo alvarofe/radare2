@@ -7,22 +7,19 @@
 #include <string.h>
 #include "../format/nin/gba.h"
 
-static int check(RBinFile *arch);
-int check_bytes(const ut8 *buf, ut64 length);
-
-static int check(RBinFile *arch) {
-	const ut8 *bytes = arch ? r_buf_buffer (arch->buf) : NULL;
-	ut64 sz = arch ? r_buf_size (arch->buf): 0;
-	return check_bytes (bytes, sz);
-
-}
-
-int check_bytes(const ut8 *buf, ut64 length) {
+static bool check_bytes(const ut8 *buf, ut64 length) {
 	ut8 lict[156];
 	if (!buf || length < 160)
 		return 0;
 	memcpy (lict, buf+0x4, 156);
 	return (!memcmp (lict, lic_gba, 156))? 1: 0;
+}
+
+static bool check(RBinFile *arch) {
+	const ut8 *bytes = arch ? r_buf_buffer (arch->buf) : NULL;
+	ut64 sz = arch ? r_buf_size (arch->buf): 0;
+	return check_bytes (bytes, sz);
+
 }
 
 static Sdb* get_sdb (RBinObject *o) {
@@ -103,6 +100,7 @@ static RList* sections(RBinFile *arch) {
 	s->size = sz;
 	s->vsize = 0x2000000;
 	s->srwx = R_BIN_SCN_READABLE | R_BIN_SCN_EXECUTABLE | R_BIN_SCN_MAP;
+	s->add = true;
 
 	r_list_append (ret, s);
 	return ret;

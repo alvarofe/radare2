@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2013-2016 - pancake */
+/* radare - LGPL - Copyright 2013-2017 - pancake */
 
 #include <r_cons.h>
 
@@ -124,11 +124,13 @@ static int get_piece(const char *p, char *chr) {
 static char *prefixline(RConsCanvas *c, int *left) {
 	int x, len;
 	char *p;
-	if (!c || strlen (c->b) < (c->y * c->w)) {
+	int b_len = c->w * c->h;
+	int yxw = c->y * c->w;
+	if (!c || b_len < yxw) {
 		return NULL;
 	}
-	p = c->b + (c->y * c->w);
-	len = strlen (p) - 1;
+	p = c->b + yxw;
+	len = b_len - yxw - 1;
 	for (x = 0; (p[x] && x < c->x) && x < len; x++) {
 		if (p[x] == '\n') {
 			p[x] = ' ';
@@ -243,6 +245,7 @@ R_API void r_cons_canvas_write(RConsCanvas *c, const char *s) {
 	/* split the string into pieces of non-ANSI chars and print them normally,
 	** using the ANSI chars to set the attr of the canvas */
 	orig_x = c->x;
+	r_cons_break_push (NULL, NULL);
 	do {
 		const char *s_part = set_attr (c, s);
 		ch = 0;
@@ -273,7 +276,8 @@ R_API void r_cons_canvas_write(RConsCanvas *c, const char *s) {
 			c->x += slen;
 		}
 		s += piece_len;
-	} while (*s);
+	} while (*s && !r_cons_is_breaked ());
+	r_cons_break_pop ();
 	c->x = orig_x;
 }
 
@@ -414,7 +418,6 @@ R_API void r_cons_canvas_box(RConsCanvas *c, int x, int y, int w, int h, const c
 		row[w - 1] = roundcorners? '\'': br_corner[0];
 		W (row_ptr);
 	}
-
 	for (i = 1; i < h - 1; i++) {
 		if (G (x, y + i)) W (vline);
 		if (G (x + w - 1, y + i)) W (vline);

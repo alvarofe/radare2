@@ -147,7 +147,7 @@ typedef struct r_cmd_java_cms_t {
 
 #define PROTOTYPES "prototypes"
 #define PROTOTYPES_ARGS " <jaicmf>" // < j | a | i | c | m | f>
-#define PROTOTYPES_DESC "show in JSON, or All,Imports,Class,Methods,Fields,Methods,Fields"
+#define PROTOTYPES_DESC "show in JSON, or All,Imports,Class,Methods,Fields"
 #define PROTOTYPES_LEN 10
 
 #define RESOLVE_CP "resolve_cp"
@@ -557,7 +557,7 @@ static int r_cmd_java_get_cp_bytes_and_write (RCore *core, RBinJavaObj *obj, ut1
 	if (res == true) {
 		ut64 n_file_sz = 0;
 		ut8 * bin_buffer = NULL;
-		res = r_io_use_desc (core->io, core->file->desc);
+		res = r_io_use_desc (core->io, core->file->desc->fd);
 		n_file_sz = r_io_size (core->io);
 		bin_buffer = n_file_sz > 0 ? malloc (n_file_sz) : NULL;
 		if (bin_buffer) {
@@ -885,7 +885,7 @@ static int r_cmd_java_handle_reload_bin (RCore *core, const char *cmd) {
 	// XXX this may cause problems cause the file we are looking at may not be the bin we want.
 	// lets pretend it is for now
 	if (buf_size == 0) {
-		res = r_io_use_desc (core->io, core->file->desc);
+		res = r_io_use_desc (core->io, core->file->desc->fd);
 		buf_size = r_io_size (core->io);
 		buf = malloc (buf_size);
 		memset (buf, 0, buf_size);
@@ -1035,7 +1035,7 @@ static int r_cmd_java_handle_calc_class_sz (RCore *core, const char *cmd) {
 	ut64 sz = UT64_MAX;
 	ut64 addr = UT64_MAX;
 	ut64 res_size = UT64_MAX,
-		 cur_fsz = r_io_desc_size (core->io, r_core_file_cur (core)->desc);
+		 cur_fsz = r_io_desc_size (r_core_file_cur (core)->desc);
 	ut8 *buf = NULL;
 	ut32 init_size = (1 << 16);
 	const char *p = cmd ? r_cmd_java_consumetok (cmd, ' ', -1): NULL;
@@ -1082,7 +1082,7 @@ static int r_cmd_java_handle_isvalid (RCore *core, const char *cmd) {
 	int res = false;
 	ut64 res_size = UT64_MAX;
 	ut8 *buf = NULL;
-	ut32 cur_fsz =  r_io_desc_size (core->io, r_core_file_cur (core)->desc);
+	ut32 cur_fsz =  r_io_desc_size (r_core_file_cur (core)->desc);
 	ut64 sz = UT64_MAX;
 	const char *p = cmd ? r_cmd_java_consumetok (cmd, ' ', -1): NULL;
 	ut64 addr = UT64_MAX;
@@ -1404,7 +1404,8 @@ static int r_cmd_java_call(void *user, const char *input) {
 	}
 	for (; i < END_CMDS; i++) {
 		//IFDBG r_cons_printf ("Checking cmd: %s %d %s\n", JAVA_CMDS[i].name, JAVA_CMDS[i].name_len, p);
-		IFDBG r_cons_printf ("Checking cmd: %s %d\n", JAVA_CMDS[i].name, strncmp (input+5, JAVA_CMDS[i].name, JAVA_CMDS[i].name_len));
+		IFDBG r_cons_printf ("Checking cmd: %s %d\n", JAVA_CMDS[i].name,
+			strncmp (input+5, JAVA_CMDS[i].name, JAVA_CMDS[i].name_len));
 		if (!strncmp (input + 5, JAVA_CMDS[i].name, JAVA_CMDS[i].name_len)) {
 			const char *cmd = input + 5 + JAVA_CMDS[i].name_len;
 			if (*cmd && *cmd == ' ') cmd++;
@@ -1736,7 +1737,6 @@ static char * r_cmd_java_get_descriptor (RCore *core, RBinJavaObj *bin, ut16 idx
 	char *class_name = NULL, *fullname = NULL, *name = NULL, *descriptor = NULL;
 	RBinJavaCPTypeObj * obj = r_bin_java_get_item_from_bin_cp_list (bin, idx);
 	char * prototype = NULL;
-
 	if (idx == 0) {
 		prototype = strdup ("NULL");
 		return prototype;
@@ -2042,7 +2042,7 @@ RCorePlugin r_core_plugin_java = {
 };
 
 #ifndef CORELIB
-struct r_lib_struct_t radare_plugin = {
+RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_CORE,
 	.data = &r_core_plugin_java,
 	.version = R2_VERSION

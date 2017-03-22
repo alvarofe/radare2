@@ -1,10 +1,22 @@
-/* radare - LGPL - Copyright 2012-2016 - pancake */
+/* radare - LGPL - Copyright 2012-2017 - pancake */
 
 #include <r_util.h>
 #include <signal.h>
 
 static bool enabled = false;
 static bool disabled = false;
+
+static bool inHomeWww(const char *path) {
+	bool ret = false;
+	char *homeWww = r_str_home (".config/radare2/www/");
+	if (homeWww) {
+		if (!strncmp (path, homeWww, strlen (homeWww))) {
+			ret = true;
+		}
+		free (homeWww);
+	}
+	return ret;
+}
 
 /**
  * This function verifies that the given path is allowed. Paths are allowed only if they don't
@@ -14,39 +26,55 @@ static bool disabled = false;
  */
 R_API int r_sandbox_check_path (const char *path) {
 	size_t root_len;
-	char ch;
 	char *p;
 	/* XXX: the sandbox can be bypassed if a directory is symlink */
 
-	if (!path) return 0;
-
+	if (!path) {
+		return 0;
+	}
 	root_len = strlen (R2_LIBDIR"/radare2");
-	if (!strncmp (path, R2_LIBDIR"/radare2", root_len))
+	if (!strncmp (path, R2_LIBDIR"/radare2", root_len)) {
 		return 1;
+	}
 	root_len = strlen (R2_DATDIR"/radare2");
-	if (!strncmp (path, R2_DATDIR"/radare2", root_len))
+	if (!strncmp (path, R2_DATDIR"/radare2", root_len)) {
 		return 1;
+	}
+	if (inHomeWww (path)) {
+		return 1;
+	}
 	// Accessing stuff inside the webroot is ok even if we need .. or leading / for that
 	root_len = strlen (R2_WWWROOT);
 	if (R2_WWWROOT[0] && !strncmp (path, R2_WWWROOT, root_len) && (
 			R2_WWWROOT[root_len-1] == '/' || path[root_len] == '/' || path[root_len] == '\0')) {
 		path += strlen (R2_WWWROOT);
-		while (*path == '/') path++;
+		while (*path == '/') {
+			path++;
+		}
 	}
 
 	// ./ path is not allowed
-        if (path[0]=='.' && path[1]=='/') return 0;
+        if (path[0]=='.' && path[1]=='/') {
+		return 0;
+	}
 	// Properly check for directrory traversal using "..". First, does it start with a .. part?
         if (path[0]=='.' && path[1]=='.' && (path[2]=='\0' || path[2]=='/')) return 0;
 
 	// Or does it have .. in some other position?
-	for (p = strstr (path, "/.."); p; p = strstr(p, "/.."))
-		if (p[3] == '\0' || p[3] == '/') return 0;
-
+	for (p = strstr (path, "/.."); p; p = strstr(p, "/..")) {
+		if (p[3] == '\0' || p[3] == '/') {
+			return 0;
+		}
+	}
 	// Absolute paths are forbidden.
-	if (*path == '/') return 0;
+	if (*path == '/') {
+		return 0;
+	}
 #if __UNIX__
-	if (readlink (path, &ch, 1) != -1) return 0;
+	char ch;
+	if (readlink (path, &ch, 1) != -1) {
+		return false;
+	}
 #endif
 	return true;
 }
@@ -60,7 +88,7 @@ R_API bool r_sandbox_disable (bool e) {
 		}
 #endif
 		disabled = enabled;
-		enabled = 0;
+		enabled = false;
 	} else {
 		enabled = disabled;
 	}
@@ -69,9 +97,12 @@ R_API bool r_sandbox_disable (bool e) {
 
 R_API bool r_sandbox_enable (bool e) {
 	if (enabled) {
+		if (!e) {
+			// eprintf ("Cant disable sandbox\n");
+		}
 		return true;
 	}
-	enabled = !!e;
+	enabled = e;
 #if LIBC_HAVE_PLEDGE
 	if (enabled && pledge ("stdio rpath tty prot_exec", NULL) == -1) {
 		eprintf ("sandbox: pledge call failed\n");
@@ -203,8 +234,9 @@ R_API int r_sandbox_open (const char *path, int mode, int perm) {
 R_API FILE *r_sandbox_fopen (const char *path, const char *mode) {
 	FILE *ret = NULL;
 	char *epath = NULL;
-	if (!path)
+	if (!path) {
 		return NULL;
+	}
 	if (enabled) {
 		if (strchr (mode, 'w') || strchr (mode, 'a') || strchr (mode, '+'))
 			return NULL;
@@ -214,10 +246,12 @@ R_API FILE *r_sandbox_fopen (const char *path, const char *mode) {
 			return NULL;
 		}
 	}
-	if (!epath)
+	if (!epath) {
 		epath = expand_home (path);
-	if ((strchr (mode, 'w') || r_file_is_regular (epath)))
+	}
+	if ((strchr (mode, 'w') || r_file_is_regular (epath))) {
 		ret = fopen (epath, mode);
+	}
 	free (epath);
 	return ret;
 }

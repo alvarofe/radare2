@@ -34,19 +34,27 @@
 #include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <termios.h>
-#include <signal.h>
 #include <grp.h>
 #include <errno.h>
+#if defined(__sun)
+#include <sys/filio.h>
+#endif
 #if __linux__ && !__ANDROID__
 #include <sys/personality.h>
 #include <pty.h>
+#include <utmp.h>
 #endif
 #if defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
 #include <util.h>
 #endif
 #endif
 
-#define HAVE_PTY __UNIX__ && !__ANDROID__ && LIBC_HAVE_FORK
+#define HAVE_PTY __UNIX__ && !__ANDROID__ && LIBC_HAVE_FORK && !defined(__sun)
+
+#if EMSCRIPTEN
+#undef HAVE_PTY
+#define HAVE_PTY 0
+#endif
 
 R_API RRunProfile *r_run_new(const char *str) {
 	RRunProfile *p = R_NEW (RRunProfile);
@@ -155,6 +163,19 @@ static char *getstr(const char *src) {
 			// slurp file
 			return r_file_slurp (src + 1, NULL);
 		}
+	case '`':
+		{
+		char *msg = strdup (src + 1);
+		int msg_len = strlen (msg);
+		if (msg_len > 0) {
+			msg [msg_len - 1] = 0;
+			char *ret = r_str_trim_tail (r_sys_cmd_str (msg, NULL, NULL));
+			free (msg);
+			return ret;
+		}
+		free (msg);
+		return strdup ("");
+		}
 	case '!':
 		return r_str_trim_tail (r_sys_cmd_str (src + 1, NULL, NULL));
 	case ':':
@@ -222,56 +243,53 @@ static void setASLR(int enabled) {
 #endif
 }
 
+static void restore_saved_fd (int saved, bool resore, int fd) {
+	if (saved == -1) {
+		return;
+	}
+	if (resore) {
+		dup2 (saved, fd);
+	}
+
+	close (saved);
+}
+
 static int handle_redirection_proc (const char *cmd, bool in, bool out, bool err) {
 #if HAVE_PTY
 	// use PTY to redirect I/O because pipes can be problematic in
 	// case of interactive programs.
-	int fdm;
-
 	int saved_stdin = dup (STDIN_FILENO);
 	int saved_stdout = dup (STDOUT_FILENO);
-	int saved_stderr = dup (STDERR_FILENO);
 
-	if (forkpty (&fdm, NULL, NULL, NULL) == 0) {
+	int fdm;
+	int pid = forkpty (&fdm, NULL, NULL, NULL);
+	if (in) {
+		dup2 (fdm, STDIN_FILENO);
+	}
+	if (out) {
+		dup2 (fdm, STDOUT_FILENO);
+	}
+
+	if (pid == 0) {
 		// child - program to run
-		struct termios t;
 
 		// necessary because otherwise you can read the same thing you
 		// wrote on fdm.
+		struct termios t;
 		tcgetattr (0, &t);
 		cfmakeraw (&t);
 		tcsetattr (0, TCSANOW, &t);
 
-		if (!in) dup2 (saved_stdin, STDIN_FILENO);
-		if (!out) dup2 (saved_stdout, STDOUT_FILENO);
-		if (!err) dup2 (saved_stderr, STDERR_FILENO);
-		if (saved_stdin != -1) {
-			close (saved_stdin);
-		}
-		if (saved_stdout != -1) {
-			close (saved_stdout);
-		}
-		if (saved_stderr != -1) {
-			close (saved_stderr);
-		}
-		saved_stdin = -1;
-		saved_stdout = -1;
-		saved_stderr = -1;
-		return 0;
+		int code = r_sys_cmd (cmd);
+		restore_saved_fd (saved_stdin, in, STDIN_FILENO);
+		restore_saved_fd (saved_stdout, out, STDOUT_FILENO);
+		exit (code);
 	}
-	// father
-	if (saved_stdin != -1) {
-		close (saved_stdin);
-	}
-	if (saved_stdout != -1) {
-		close (saved_stdout);
-	}
-	if (saved_stderr != -1) {
-		close (saved_stderr);
-	}
-	if (in) dup2 (fdm, STDOUT_FILENO);
-	if (out) dup2 (fdm, STDIN_FILENO);
-	exit (r_sys_cmd (cmd));
+
+	// parent
+	close (saved_stdin);
+	close (saved_stdout);
+	return 0;
 #else
 #warning handle_redirection_proc : unimplemented for this platform
 	return -1;
@@ -386,16 +404,15 @@ R_API int r_run_parseline (RRunProfile *p, char *b) {
 	else if (!strcmp (b, "setgid")) p->_setgid = strdup (e);
 	else if (!strcmp (b, "setegid")) p->_setegid = strdup (e);
 	else if (!strcmp (b, "nice")) p->_nice = atoi (e);
+	else if (!strcmp (b, "timeout")) p->_timeout = atoi (e);
+	else if (!strcmp (b, "timeoutsig")) p->_timeout_sig = r_signal_from_string (e);
 	else if (!memcmp (b, "arg", 3)) {
 		int n = atoi (b + 3);
 		if (n >= 0 && n < R_RUN_PROFILE_NARGS) {
 			p->_args[n] = getstr (e);
-		} else eprintf ("Out of bounds args index: %d\n", n);
-	} else if (!strcmp (b, "timeout")) {
-		p->_timeout = atoi (e);
-	} else if (!strcmp (b, "timeoutsig")) {
-		// TODO: support non-numeric signal numbers here
-		p->_timeout_sig = atoi (e);
+		} else {
+			eprintf ("Out of bounds args index: %d\n", n);
+		}
 	} else if (!strcmp (b, "envfile")) {
 		char *p, buf[1024];
 		FILE *fd = fopen (e, "r");
@@ -449,6 +466,7 @@ R_API const char *r_run_help() {
 	"# clearenv=true\n"
 	"# envfile=environ.txt\n"
 	"timeout=3\n"
+	"# timeoutsig=SIGTERM # or 15\n"
 	"# connect=localhost:8080\n"
 	"# listen=8080\n"
 	"# pty=false\n"
@@ -487,20 +505,17 @@ static int fd_forward(int in_fd, int out_fd, char **buff) {
 		perror ("ioctl");
 		return -1;
 	}
-
-	if (size == 0) { // child process exited or socket is closed
+	if (!size) { // child process exited or socket is closed
 		return -1;
 	}
 
 	char *new_buff = realloc (*buff, size);
-	if (new_buff == NULL) {
+	if (!new_buff) {
 		eprintf ("Failed to allocate buffer for redirection");
 		return -1;
 	}
 	*buff = new_buff;
-
-	read (in_fd, *buff, size);
-
+	(void)read (in_fd, *buff, size);
 	if (write (out_fd, *buff, size) != size) {
 		perror ("write");
 		return -1;
@@ -526,63 +541,72 @@ static int redirect_socket_to_pty(RSocket *sock) {
 #if HAVE_PTY
 	// directly duplicating the fds using dup2() creates problems
 	// in case of interactive applications
-	int fdm;
+	int fdm, fds;
 
-	pid_t child_pid = forkpty (&fdm, NULL, NULL, NULL);
+	if (openpty (&fdm, &fds, NULL, NULL, NULL) == -1) {
+		perror ("opening pty");
+		return -1;
+	}
+
+	pid_t child_pid = r_sys_fork ();
+
 	if (child_pid == -1) {
-		perror ("forking pty");
+		eprintf ("cannot fork\n");
+		close(fdm);
+		close(fds);
 		return -1;
 	}
 
 	if (child_pid == 0) {
 		// child process
-		r_socket_close_fd (sock);
+		close (fds);
 
-		// disable the echo on slave stdin
-		struct termios t;
-		tcgetattr (0, &t);
-		cfmakeraw (&t);
-		tcsetattr (0, TCSANOW, &t);
+		char *buff = NULL;
+		int sockfd = sock->fd;
+		int max_fd = fdm > sockfd ? fdm : sockfd;
 
-		return 0;
+		while (true) {
+			fd_set readfds;
+			FD_ZERO (&readfds);
+			FD_SET (fdm, &readfds);
+			FD_SET (sockfd, &readfds);
+
+			if (select (max_fd + 1, &readfds, NULL, NULL, NULL) == -1) {
+				perror ("select error");
+				break;
+			}
+
+			if (FD_ISSET (fdm, &readfds)) {
+				if (fd_forward (fdm, sockfd, &buff) != 0) {
+					break;
+				}
+			}
+
+			if (FD_ISSET (sockfd, &readfds)) {
+				if (fd_forward (sockfd, fdm, &buff) != 0) {
+					break;
+				}
+			}
+		}
+
+		free (buff);
+		close (fdm);
+		r_socket_free (sock);
+		exit (0);
 	}
 
 	// parent
-	char *buff = NULL;
-	int sockfd = sock->fd;
-	int max_fd = fdm > sockfd ? fdm : sockfd;
-
-	while (true) {
-		fd_set readfds;
-		FD_ZERO (&readfds);
-		FD_SET (fdm, &readfds);
-		FD_SET (sockfd, &readfds);
-
-		int activity = select (max_fd + 1, &readfds, NULL, NULL, NULL);
-
-		if (activity < 0) {
-			perror ("select error");
-			break;
-		}
-
-		if (FD_ISSET (fdm, &readfds)) {
-			if (fd_forward (fdm, sockfd, &buff) != 0) {
-				break;
-			}
-		}
-
-		if (FD_ISSET (sockfd, &readfds)) {
-			if (fd_forward (sockfd, fdm, &buff) != 0) {
-				break;
-			}
-		}
-	}
-
-	free (buff);
+	r_socket_close_fd (sock);
+	login_tty (fds);
 	close (fdm);
-	r_socket_free (sock);
 
-	_exit (0);
+	// disable the echo on slave stdin
+	struct termios t;
+	tcgetattr (0, &t);
+	cfmakeraw (&t);
+	tcsetattr (0, TCSANOW, &t);
+
+	return 0;
 #else
 	// Fallback to socket to I/O redirection
 	return redirect_socket_to_stdio (sock);

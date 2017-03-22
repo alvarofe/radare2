@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2016 - pancake, jduck, TheLemonMan, saucec0de */
+/* radare - LGPL - Copyright 2009-2017 - pancake, jduck, TheLemonMan, saucec0de */
 
 #include <r_debug.h>
 #include <r_core.h>
@@ -26,7 +26,6 @@ R_API void r_debug_info_free (RDebugInfo *rdi) {
 	free (rdi->cmdline);
 	free (rdi->libname);
 }
-
 
 /*
  * Recoiling after a breakpoint has two stages:
@@ -298,6 +297,7 @@ R_API RDebug *r_debug_new(int hard) {
 	dbg->forked_pid = -1;
 	dbg->trace_clone = 0;
 	dbg->trace_aftersyscall = true;
+	dbg->follow_child = false;
 	R_FREE (dbg->btalgo);
 	dbg->trace_execs = 0;
 	dbg->anal = NULL;
@@ -370,7 +370,6 @@ R_API int r_debug_attach(RDebug *dbg, int pid) {
 	if (dbg && dbg->h && dbg->h->attach) {
 		ret = dbg->h->attach (dbg, pid);
 		if (ret != -1) {
-			//eprintf ("Attached debugger to pid = %d, tid = %d\n", pid, ret);
 			r_debug_select (dbg, pid, ret); //dbg->pid, dbg->tid);
 		}
 	}
@@ -604,8 +603,11 @@ R_API RDebugReasonType r_debug_wait(RDebug *dbg, RBreakpointItem **bp) {
 			return R_DEBUG_REASON_ERROR;
 		}
 
+		bool libs_bp = (dbg->glob_libs || dbg->glob_unlibs) ? true : false;
 		/* if the underlying stop reason is a breakpoint, call the handlers */
-		if (reason == R_DEBUG_REASON_BREAKPOINT || reason == R_DEBUG_REASON_STEP) {
+		if (reason == R_DEBUG_REASON_BREAKPOINT || reason == R_DEBUG_REASON_STEP || 
+			(libs_bp && 
+			((reason == R_DEBUG_REASON_NEW_LIB) || (reason == R_DEBUG_REASON_EXIT_LIB)))) {
 			RRegItem *pc_ri;
 			RBreakpointItem *b = NULL;
 			ut64 pc;
@@ -641,7 +643,7 @@ R_API RDebugReasonType r_debug_wait(RDebug *dbg, RBreakpointItem **bp) {
 			/* handle signal on continuations here */
 			eprintf ("got signal...\n");
 			int what = r_debug_signal_what (dbg, dbg->reason.signum);
-			const char *name = r_debug_signal_resolve_i (dbg, dbg->reason.signum);
+			const char *name = r_signal_to_string (dbg->reason.signum);
 			if (name && strcmp ("SIGTRAP", name)) {
 				r_cons_printf ("[+] signal %d aka %s received %d\n",
 						dbg->reason.signum, name, what);
@@ -934,7 +936,7 @@ repeat:
 			RCore *core = (RCore *)dbg->corebind.core;
 			RNum *num = core->num;
 			if (reason == R_DEBUG_REASON_COND) {
-				if (bp->cond && dbg->corebind.cmd) {
+				if (bp && bp->cond && dbg->corebind.cmd) {
 					dbg->corebind.cmd (dbg->corebind.core, bp->cond);
 				}
 				if (num->value) {
@@ -943,14 +945,24 @@ repeat:
 			}
 		}
 
-
+#if __linux__
+		if (reason == R_DEBUG_REASON_NEW_PID && dbg->follow_child) {
+#if DEBUGGER
+			void linux_attach_new_process (RDebug *dbg);
+			linux_attach_new_process (dbg);
+#endif
+			goto repeat;
+		}
+#endif
 #if __WINDOWS__
 		if (reason != R_DEBUG_REASON_DEAD) {
 			// XXX(jjd): returning a thread id?!
 			ret = dbg->tid;
 		}
 		if (reason == R_DEBUG_REASON_NEW_LIB ||
-			reason == R_DEBUG_REASON_EXIT_LIB) {
+			reason == R_DEBUG_REASON_EXIT_LIB ||
+			reason == R_DEBUG_REASON_NEW_TID ||
+			reason == R_DEBUG_REASON_EXIT_TID ) {
 			goto repeat;
 		}
 #endif
@@ -992,7 +1004,7 @@ repeat:
 				dbg->iob.read_at (dbg->iob.io, pc, buf, sizeof (buf));
 				r_anal_op (dbg->anal, &op, pc, buf, sizeof (buf));
 				if (op.size > 0) {
-					const char *signame = r_debug_signal_resolve_i (dbg, dbg->reason.signum);
+					const char *signame = r_signal_to_string (dbg->reason.signum);
 					r_debug_reg_set (dbg, "PC", pc+op.size);
 					eprintf ("Skip signal %d handler %s\n",
 						dbg->reason.signum, signame);
@@ -1014,6 +1026,12 @@ repeat:
 R_API int r_debug_continue(RDebug *dbg) {
 	return r_debug_continue_kill (dbg, 0); //dbg->reason.signum);
 }
+
+#if __WINDOWS__ && !__CYGWIN__
+R_API int r_debug_continue_pass_exception(RDebug *dbg) {
+	return r_debug_continue_kill (dbg, DBG_EXCEPTION_NOT_HANDLED);
+}
+#endif
 
 R_API int r_debug_continue_until_nontraced(RDebug *dbg) {
 	eprintf ("TODO\n");

@@ -1,8 +1,10 @@
 #!/bin/sh
 
-MAKE=make
-gmake --help >/dev/null 2>&1
-[ $? = 0 ] && MAKE=gmake
+if [ -z "${MAKE}" ]; then
+  MAKE=make
+  gmake --help >/dev/null 2>&1
+  [ $? = 0 ] && MAKE=gmake
+fi
 [ -z "${MAKE_JOBS}" ] && MAKE_JOBS=12
 [ -z "${CERTID}" ] && CERTID=org.radare.radare2
 
@@ -36,6 +38,10 @@ case "$1" in
 	;;
 '')
 	:
+	;;
+-)
+	shift
+	CFGARG="${CFGARG} $*"
 	;;
 *)
 	PREFIX="$1"

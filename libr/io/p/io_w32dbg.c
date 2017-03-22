@@ -23,8 +23,8 @@ typedef struct {
 #define R_IO_NFDS 2
 
 static int debug_os_read_at(RIOW32Dbg *dbg, void *buf, int len, ut64 addr) {
-	DWORD ret;
-        ReadProcessMemory (dbg->pi.hProcess, (void*)(size_t)addr, buf, len, &ret);
+	SIZE_T ret;
+	ReadProcessMemory (dbg->pi.hProcess, (void*)(size_t)addr, buf, len, &ret);
 //	if (len != ret)
 //		eprintf ("Cannot read 0x%08llx\n", addr);
 	return len; // XXX: Handle read correctly and not break r2 shell
@@ -37,7 +37,7 @@ static int __read(RIO *io, RIODesc *fd, ut8 *buf, int len) {
 }
 
 static int w32dbg_write_at(RIOW32Dbg *dbg, const ut8 *buf, int len, ut64 addr) {
-	DWORD ret;
+	SIZE_T ret;
 	return 0 != WriteProcessMemory (dbg->pi.hProcess, (void *)(size_t)addr, buf, len, &ret)? len: 0;
 }
 
@@ -45,7 +45,7 @@ static int __write(RIO *io, RIODesc *fd, const ut8 *buf, int len) {
 	return w32dbg_write_at (fd->data, buf, len, io->off);
 }
 
-static int __plugin_open(RIO *io, const char *file, ut8 many) {
+static bool __plugin_open(RIO *io, const char *file, bool many) {
 	if (!strncmp (file, "attach://", 9)) {
 		return true;
 	}
@@ -63,6 +63,7 @@ static int __attach (RIOW32Dbg *dbg) {
 static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 	if (__plugin_open (io, file, 0)) {
 		char *pidpath;
+		RIODesc *ret
 		RIOW32Dbg *dbg = R_NEW0 (RIOW32Dbg);
 		if (!dbg) {
 			return NULL;
@@ -73,8 +74,10 @@ static RIODesc *__open(RIO *io, const char *file, int rw, int mode) {
 			return NULL;
 		}
 		pidpath = r_sys_pid_to_path (dbg->pid);
-		RETURN_IO_DESC_NEW (&r_io_plugin_w32dbg, -1,
-			pidpath, rw | R_IO_EXEC, mode, dbg);
+		ret = r_io_desc_new (io, &r_io_plugin_w32dbg,
+				file, rw | R_IO_EXEC, mode, dbg);
+		ret->name = pidpath;
+		return ret;
 	}
 	return NULL;
 }
@@ -119,17 +122,33 @@ static int __system(RIO *io, RIODesc *fd, const char *cmd) {
 	return -1;
 }
 
+static int __getpid (RIODesc *fd) {
+	RIOW32Dbg *iow = (RIOW32Dbg *)(fd ? fd->data : NULL);
+	if (!iow)
+		return -1;
+	return iow->pid;
+}
+
+static int __gettid (RIODesc *fd) {
+	RIOW32Dbg *iow = (RIOW32Dbg *)(fd ? fd->data : NULL);
+	if (!iow)
+		return -1;
+	return iow->tid;
+}
+
 RIOPlugin r_io_plugin_w32dbg = {
 	.name = "w32dbg",
-        .desc = "w32dbg io",
+	.desc = "w32dbg io",
 	.license = "LGPL3",
-        .open = __open,
-        .close = __close,
+	.open = __open,
+	.close = __close,
 	.read = __read,
-        .check = __plugin_open,
+	.check = __plugin_open,
 	.lseek = __lseek,
 	.system = __system,
 	.write = __write,
+	.getpid = __getpid,
+	.gettid = __gettid,
 	.isdbg = true
 };
 #else

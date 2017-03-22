@@ -223,6 +223,8 @@ R_API int r_cons_fgets(char *buf, int len, int argc, const char **argv) {
 	if (cons->user_fgets) {
 		RETURN (cons->user_fgets (buf, len));
 	}
+	printf ("%s", cons->line->prompt);
+	fflush (stdout);
 	*buf = '\0';
 	fflush (cons->fdin);
 	if (color) {
@@ -483,7 +485,9 @@ R_API int r_cons_yesno(int def, const char *fmt, ...) {
 
 R_API char *r_cons_input(const char *msg) {
 	char *oprompt = r_line_get_prompt (); //r_cons_singleton()->line->prompt);
-	if (!oprompt) return NULL;
+	if (!oprompt) {
+		return NULL;
+	}
 	char buf[1024];
 	if (msg) {
 		//r_cons_printf ("%s\n", msg);
