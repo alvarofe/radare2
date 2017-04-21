@@ -90,7 +90,7 @@ R_API int r_io_desc_cache_write(RIODesc *desc, ut64 paddr, const ut8 *buf, int l
 	if (len > desc_sz) {
 		len = (int)desc_sz;
 	}
-	if (paddr > (desc_sz)) {
+	if (paddr > (desc_sz - len)) {
 		len = (int)(desc_sz - paddr);
 	}
 	caddr = paddr / R_IO_DESC_CACHE_SIZE;
