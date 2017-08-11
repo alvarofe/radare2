@@ -406,7 +406,7 @@ R_API bool r_io_section_priorize_bin(RIO *io, ut32 bin_id) {
 	return true;
 }
 
-static bool _create_null_map(RIO *io, RIOSection *sec, ut64 at) {
+static bool _create_malloc_map(RIO *io, RIOSection *sec, ut64 at) {
 	RIOMap *map = NULL;
 	RIODesc *desc = NULL;
 	char *uri = NULL;
@@ -414,7 +414,7 @@ static bool _create_null_map(RIO *io, RIOSection *sec, ut64 at) {
 	if (!io || !sec) {
 		return false;
 	}
-	uri = sdb_fmt (2, "null://%"PFMT64u "", sec->vsize - sec->size);
+	uri = sdb_fmt (2, "malloc://%"PFMT64u "", sec->vsize - sec->size);
 	desc = r_io_open_at (io, uri, sec->flags, 664, at);
 	if (!desc) {
 		return false;
@@ -468,7 +468,7 @@ static bool _section_apply_for_anal_patch(RIO *io, RIOSection *sec, bool patch) 
 			at = sec->vaddr + sec->size;
 			// TODO: harden this, handle mapslit
 			// craft the uri for the null-fd
-			if (!_create_null_map (io, sec, at)) {
+			if (!_create_malloc_map (io, sec, at)) {
 				return false;
 			}
 			// we need to create this map for transfering the flags, no real remapping here

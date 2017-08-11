@@ -2345,6 +2345,7 @@ RBinElfSection* Elf_(r_bin_elf_get_sections)(ELFOBJ *bin) {
 		ret[i].align = bin->shdr[i].sh_addralign;
 		ret[i].flags = bin->shdr[i].sh_flags;
 		ret[i].link = bin->shdr[i].sh_link;
+		ret[i].type = bin->shdr[i].sh_type;
 		ret[i].info = bin->shdr[i].sh_info;
 		if (bin->ehdr.e_type == ET_REL)	{
 			ret[i].rva = bin->baddr + bin->shdr[i].sh_offset;
